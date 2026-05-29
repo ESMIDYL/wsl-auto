@@ -6,7 +6,7 @@
     by Dylan Smith.
 .USAGE
     From any PowerShell (run as Admin):
-    irm https://raw.githubusercontent.com/dylansmithkilbeggan-rgb/wsl-auto/main/wsl-auto/setup-wsl.ps1 | iex
+    irm https://raw.githubusercontent.com/ESMIDYL/wsl-auto/main/wsl-auto/setup-wsl.ps1 | iex
 #>
 
 $ErrorActionPreference = "Stop"
@@ -228,35 +228,31 @@ if ($installDocker -eq 'Y' -or $installDocker -eq 'y') {
 Write-Step "Phase 4: Installing Docker Engine"
 
 Write-Host "  Removing conflicting packages..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y \$pkg 2>/dev/null; done"
+wsl -d Ubuntu-24.04 -- bash -c 'for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y $pkg 2>/dev/null; done'
 Write-Check "Conflicting packages removed" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding Docker GPG key and repository..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "sudo apt-get update && sudo apt-get install -y ca-certificates curl && sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc"
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update && sudo apt-get install -y ca-certificates curl && sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc'
 Write-Check "Docker GPG key installed" ($LASTEXITCODE -eq 0) | Out-Null
 
-wsl -d Ubuntu-24.04 -- bash -c "echo \"deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \$(. /etc/os-release && echo \"\${UBUNTU_CODENAME:-\$VERSION_CODENAME}\") stable\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null"
+wsl -d Ubuntu-24.04 -- bash -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null'
 Write-Check "Docker repository added" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Installing Docker packages (this may take a few minutes)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin'
 Write-Check "Docker installed" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding user to docker group..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "sudo usermod -aG docker \$USER"
+wsl -d Ubuntu-24.04 -- bash -c 'sudo usermod -aG docker $USER'
 Write-Check "User added to docker group" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding Docker auto-start to .bashrc..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "grep -q 'service docker status' ~/.bashrc || cat >> ~/.bashrc << 'DOCKEREOF'
-
-# Auto-start Docker service in WSL
-if grep -q \"microsoft\" /proc/version > /dev/null 2>&1; then
-    if service docker status 2>&1 | grep -q \"is not running\"; then
-        wsl.exe --distribution \"\${WSL_DISTRO_NAME}\" --user root \
-            --exec /usr/sbin/service docker start > /dev/null 2>&1
-    fi
+$dockerAutoStart = @'
+if ! grep -q "service docker status" ~/.bashrc; then
+printf '\n# Auto-start Docker service in WSL\nif grep -q "microsoft" /proc/version > /dev/null 2>&1; then\n    if service docker status 2>&1 | grep -q "is not running"; then\n        wsl.exe --distribution "${WSL_DISTRO_NAME}" --user root \\\n            --exec /usr/sbin/service docker start > /dev/null 2>&1\n    fi\nfi\n' >> ~/.bashrc
 fi
-DOCKEREOF"
+'@
+$dockerAutoStart | wsl -d Ubuntu-24.04 -- bash
 Write-Check "Docker auto-start added to .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Starting Docker service..." -ForegroundColor Yellow
@@ -360,3 +356,4 @@ Write-Host "  Launch Ubuntu anytime:" -ForegroundColor Cyan
 Write-Host "    - Start Menu -> Ubuntu 24.04" -ForegroundColor White
 Write-Host "    - Or run:  wsl -d Ubuntu-24.04" -ForegroundColor White
 Write-Host ""
+
