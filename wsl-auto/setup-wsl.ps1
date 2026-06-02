@@ -209,12 +209,6 @@ if (-not $ubuntuInstalled) {
         return
     }
     Write-Check "Ubuntu-24.04 registered in WSL" $true | Out-Null
-
-    Write-Host ""
-    Write-Host "  User created! Now run the SAME COMMAND again" -ForegroundColor Yellow
-    Write-Host "  to finish setup (DNS, Docker, Kiro)." -ForegroundColor Yellow
-    Write-Host ""
-    return
 }
 
 # ============================================================
