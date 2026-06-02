@@ -55,11 +55,8 @@ function Confirm-FeatureEnabled {
 function Confirm-DistroInstalled {
     param([string]$Distro)
     try {
-        $list = wsl --list --quiet 2>$null
-        if ($null -eq $list) { return $false }
-        # WSL output contains hidden Unicode chars - clean them
-        $cleaned = ($list | Out-String) -replace '\x00','' -replace '[^\x20-\x7E\r\n]',''
-        return [bool]($cleaned -match $Distro)
+        $result = wsl -d $Distro -- echo "OK" 2>$null
+        return [bool]($result -match "OK")
     } catch {
         return $false
     }
