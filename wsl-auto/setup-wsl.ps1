@@ -224,6 +224,14 @@ Write-Host "  Setting /etc/wsl.conf..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/wsl.conf && printf "[network]\ngenerateResolvConf=false\n[boot]\nsystemd=true\n" | sudo tee /etc/wsl.conf > /dev/null'
 Write-Check "wsl.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
+Write-Host "  Restarting WSL to apply changes..." -ForegroundColor Yellow
+wsl --terminate Ubuntu-24.04
+Start-Sleep -Seconds 2
+
+Write-Host "  Re-applying /etc/resolv.conf after restart..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null'
+Write-Check "resolv.conf re-applied" ($LASTEXITCODE -eq 0) | Out-Null
+
 # ============================================================
 # PHASE 4: Install Docker Engine (optional)
 # ============================================================
@@ -231,6 +239,10 @@ $installDocker = Read-Host "  Would you like to install Docker? (Y/N)"
 if ($installDocker -eq 'Y' -or $installDocker -eq 'y') {
 
 Write-Step "Phase 4: Installing Docker Engine"
+
+Write-Host "  Verifying DNS is working..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'nslookup download.docker.com > /dev/null 2>&1 || (echo "DNS not working, retrying..." && sleep 2 && nslookup download.docker.com > /dev/null 2>&1)'
+Write-Check "DNS resolution working" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Removing conflicting packages..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y $pkg 2>/dev/null; done'
@@ -252,23 +264,125 @@ wsl -d Ubuntu-24.04 -- bash -c 'sudo usermod -aG docker $USER'
 Write-Check "User added to docker group" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding Docker auto-start to .bashrc..." -ForegroundColor Yellow
-$dockerAutoStart = @'
-if ! grep -q "service docker status" ~/.bashrc; then
-printf '\n# Auto-start Docker service in WSL\nif grep -q "microsoft" /proc/version > /dev/null 2>&1; then\n    if service docker status 2>&1 | grep -q "is not running"; then\n        wsl.exe --distribution "${WSL_DISTRO_NAME}" --user root \\\n            --exec /usr/sbin/service docker start > /dev/null 2>&1\n    fi\nfi\n' >> ~/.bashrc
-fi
-'@
-$dockerAutoStart | wsl -d Ubuntu-24.04 -- bash
+wsl -d Ubuntu-24.04 -- bash -c 'grep -q "service docker status" ~/.bashrc || printf "\n# Auto-start Docker service in WSL\nif grep -q \"microsoft\" /proc/version > /dev/null 2>&1; then\n    if service docker status 2>&1 | grep -q \"is not running\"; then\n        wsl.exe --distribution \"\${WSL_DISTRO_NAME}\" --user root \\\n            --exec /usr/sbin/service docker start > /dev/null 2>&1\n    fi\nfi\n" >> ~/.bashrc'
 Write-Check "Docker auto-start added to .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Starting Docker service..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'sudo service docker start'
 Write-Check "Docker service started" ($LASTEXITCODE -eq 0) | Out-Null
 
+# --- Configure .bashrc and Docker login ---
 Write-Host ""
-Write-Host "  Docker login to Ericsson ARM registry:" -ForegroundColor Yellow
-Write-Host "  Make sure ARM_USER and ARM_TOKEN are exported in your .bashrc" -ForegroundColor Yellow
-Write-Host "  Then run: docker login armdocker.rnd.ericsson.se -u \$ARM_USER -p \$ARM_TOKEN" -ForegroundColor White
+Write-Host "  Now let's set up your .bashrc environment and Docker login." -ForegroundColor Cyan
 Write-Host ""
+Write-Host "  You'll need your Identity Tokens from:" -ForegroundColor Yellow
+Write-Host "    SELI: https://arm.seli.gic.ericsson.se/ui/packages" -ForegroundColor White
+Write-Host "    SERO: https://arm.sero.gic.ericsson.se/ui/packages" -ForegroundColor White
+Write-Host ""
+Write-Host "  How to get your token:" -ForegroundColor Cyan
+Write-Host "    1. Go to the URL above and click Login (top right)" -ForegroundColor White
+Write-Host "    2. Login with your Ericsson credentials" -ForegroundColor White
+Write-Host "    3. Click the dropdown arrow (top right) -> Edit Profile" -ForegroundColor White
+Write-Host "    4. Enter your password to unlock your profile" -ForegroundColor White
+Write-Host "    5. Click 'Generate An Identity Token'" -ForegroundColor White
+Write-Host "    6. Give it a description -> Click Next" -ForegroundColor White
+Write-Host "    7. Copy the Reference Token (save it - you can't see it again!)" -ForegroundColor White
+Write-Host ""
+
+$signum = Read-Host "  Enter your Ericsson signum (e.g. esmidyl)"
+$seroToken = Read-Host "  Enter your SERO Identity Token"
+$seliToken = Read-Host "  Enter your SELI Identity Token"
+
+if ($signum -and $seroToken -and $seliToken) {
+    Write-Host ""
+    Write-Host "  Writing environment config to .bashrc..." -ForegroundColor Yellow
+
+    # Check if already configured
+    $alreadyDone = wsl -d Ubuntu-24.04 -- bash -c 'grep -q "Ericsson Environment Configuration" ~/.bashrc && echo "YES" || echo "NO"'
+    if ($alreadyDone -match "YES") {
+        Write-Host "  .bashrc already has Ericsson config - skipping to avoid duplicates." -ForegroundColor Yellow
+        Write-Check ".bashrc already configured" $true | Out-Null
+    } else {
+        # Write a temp script inside WSL to avoid Windows line-ending issues
+        wsl -d Ubuntu-24.04 -- bash -c "cat > /tmp/setup_bashrc.sh << 'BASHRCEOF'
+#!/bin/bash
+cat >> ~/.bashrc << 'EOF'
+
+# ============================================================
+# Ericsson Environment Configuration
+# ============================================================
+
+# Aliases
+alias mvnst='mvn clean install -DskipTests'
+alias rebase='git pull --rebase origin master'
+alias pushmaster='git push origin HEAD:refs/for/master'
+alias pushdraft='git push origin HEAD:refs/drafts/master'
+
+# Credentials
+export SIGNUM=""PLACEHOLDER_SIGNUM""
+export SERO_TOKEN=""PLACEHOLDER_SERO""
+export SELI_TOKEN=""PLACEHOLDER_SELI""
+
+export PATH=/home/\$SIGNUM/bob:\$PATH
+export HELM_USER=\$SIGNUM
+export KUBECONFIG=/home/\$SIGNUM/.kube/config
+
+export IMAGE_SECRET=armdocker
+
+export K8_NAMESPACE=\$SIGNUM
+export K8S_NAMESPACE=\$SIGNUM
+
+export HELM_REPO_API_TOKEN=\$SELI_TOKEN
+export HELM_INSTALL_TIMEOUT=5m0s
+
+export ARM_USER=\$SIGNUM
+export ARM_TOKEN=\$SELI_TOKEN
+
+export SELI_ARTIFACTORY_REPO_USER=\$SIGNUM
+export SELI_ARTIFACTORY_REPO_PASS=\$SELI_TOKEN
+
+export SERO_ARTIFACTORY_REPO_USER=\$SIGNUM
+export SERO_ARTIFACTORY_REPO_PASS=\$SERO_TOKEN
+
+# run bob commands to build your project and package a helm chart
+bob-pack() {
+  bob clean init-dev build image package-local
+}
+
+# command to remove docker image by passing the image name
+rmi () {
+  docker rmi \$(docker images | grep \"\$1\")
+}
+
+# uninstall everything and reset namespace
+function reset {
+  helm delete \$(helm ls --short --namespace \$K8_NAMESPACE) --namespace \$K8_NAMESPACE
+  kubectl delete namespace \$K8_NAMESPACE && kubectl create namespace \$K8_NAMESPACE || kubectl create namespace \$K8_NAMESPACE
+  kubectl create secret generic \$IMAGE_SECRET --from-file=.dockerconfigjson=\$HOME/.docker/config.json --type=kubernetes.io/dockerconfigjson --namespace \$K8_NAMESPACE || true
+}
+EOF
+BASHRCEOF
+chmod +x /tmp/setup_bashrc.sh"
+
+        # Replace placeholders with actual values
+        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's/PLACEHOLDER_SIGNUM/$signum/g' /tmp/setup_bashrc.sh"
+        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's|PLACEHOLDER_SERO|$seroToken|g' /tmp/setup_bashrc.sh"
+        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's|PLACEHOLDER_SELI|$seliToken|g' /tmp/setup_bashrc.sh"
+
+        # Run it
+        wsl -d Ubuntu-24.04 -- bash -c 'bash /tmp/setup_bashrc.sh && rm /tmp/setup_bashrc.sh'
+        Write-Check ".bashrc environment configured" ($LASTEXITCODE -eq 0) | Out-Null
+    }
+
+    # Docker login using the provided credentials
+    Write-Host "  Logging into Ericsson ARM Docker registry..." -ForegroundColor Yellow
+    wsl -d Ubuntu-24.04 -- bash -c "docker login armdocker.rnd.ericsson.se -u $signum -p $seliToken"
+    Write-Check "Docker login to armdocker.rnd.ericsson.se" ($LASTEXITCODE -eq 0) | Out-Null
+
+} else {
+    Write-Host "  Missing values - skipping .bashrc and Docker login." -ForegroundColor Yellow
+    Write-Host "  You can set them up manually later." -ForegroundColor Yellow
+}
 
 } else {
     Write-Host ""
@@ -298,9 +412,12 @@ Write-Host "    - License: Select 'Pro license'" -ForegroundColor White
 Write-Host "    - Start URL: https://d-9367077c28.awsapps.com/start" -ForegroundColor White
 Write-Host "    - Region: eu-west-1" -ForegroundColor White
 Write-Host ""
+Write-Host "  Kiro will open in Ubuntu. Follow the prompts," -ForegroundColor Yellow
+Write-Host "  then type 'exit' when done to return here." -ForegroundColor Yellow
+Write-Host ""
 Read-Host "  Press Enter to start Kiro CLI installation"
 
-wsl -d Ubuntu-24.04 -- bash -c 'export PATH="$HOME/.local/bin:$PATH" && curl -fsSL https://cli.kiro.dev/install | bash'
+wsl -d Ubuntu-24.04 -- bash -ic 'export PATH="$HOME/.local/bin:$PATH" && curl -fsSL https://cli.kiro.dev/install | bash && echo "" && echo "Kiro installed! Type exit to continue." && exec bash'
 Write-Check "Kiro CLI installer completed" ($LASTEXITCODE -eq 0) | Out-Null
 
 } else {
