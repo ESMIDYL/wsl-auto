@@ -9,7 +9,7 @@
     irm https://raw.githubusercontent.com/ESMIDYL/wsl-auto/main/wsl-auto/setup-wsl.ps1 | iex
 #>
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -216,20 +216,25 @@ if (-not $ubuntuInstalled) {
 # ============================================================
 Write-Step "Phase 3: Configuring DNS and wsl.conf"
 
+# Enable passwordless sudo for this setup session (avoids repeated password prompts)
+Write-Host "  Enabling passwordless sudo for setup (you may need to enter your password once)..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'echo "$(whoami) ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/temp-setup > /dev/null'
+Write-Check "Passwordless sudo enabled" ($LASTEXITCODE -eq 0) | Out-Null
+
 Write-Host "  Setting /etc/resolv.conf (Ericsson DNS)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null'
+wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' | Out-Null
 Write-Check "resolv.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Setting /etc/wsl.conf..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/wsl.conf && printf "[network]\ngenerateResolvConf=false\n[boot]\nsystemd=true\n" | sudo tee /etc/wsl.conf > /dev/null'
+wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/wsl.conf && printf "[network]\ngenerateResolvConf=false\n[boot]\nsystemd=true\n" | sudo tee /etc/wsl.conf > /dev/null' | Out-Null
 Write-Check "wsl.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Restarting WSL to apply changes..." -ForegroundColor Yellow
-wsl --terminate Ubuntu-24.04
+wsl --terminate Ubuntu-24.04 | Out-Null
 Start-Sleep -Seconds 2
 
 Write-Host "  Re-applying /etc/resolv.conf after restart..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null'
+wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' | Out-Null
 Write-Check "resolv.conf re-applied" ($LASTEXITCODE -eq 0) | Out-Null
 
 # ============================================================
@@ -250,43 +255,49 @@ if ($LASTEXITCODE -ne 0) {
 Write-Check "Can reach download.docker.com" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Removing conflicting packages..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y $pkg 2>/dev/null; done'
+wsl -d Ubuntu-24.04 -- bash -c 'for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y $pkg 2>/dev/null; done' | Out-Null
 Write-Check "Conflicting packages removed" $true | Out-Null
 
 Write-Host "  Updating package list..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update'
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update -qq' | Out-Null
 Write-Check "apt-get update" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Installing prerequisites..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y ca-certificates curl'
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y -qq ca-certificates curl' | Out-Null
 Write-Check "ca-certificates and curl installed" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding Docker GPG key..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc'
+wsl -d Ubuntu-24.04 -- bash -c 'sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc' | Out-Null
 Write-Check "Docker GPG key added" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding Docker repository..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null'
+wsl -d Ubuntu-24.04 -- bash -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null' | Out-Null
 Write-Check "Docker repository added" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Updating package list with Docker repo..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update'
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update -qq' | Out-Null
 Write-Check "apt-get update (with Docker repo)" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Installing Docker packages (this may take a few minutes)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin'
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin' | Out-Null
 Write-Check "Docker packages installed" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding user to docker group..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo usermod -aG docker $USER'
+wsl -d Ubuntu-24.04 -- bash -c 'sudo usermod -aG docker $USER' | Out-Null
 Write-Check "User added to docker group" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding Docker auto-start to .bashrc..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'grep -q "service docker status" ~/.bashrc || printf "\n# Auto-start Docker service in WSL\nif grep -q \"microsoft\" /proc/version > /dev/null 2>&1; then\n    if service docker status 2>&1 | grep -q \"is not running\"; then\n        wsl.exe --distribution \"\${WSL_DISTRO_NAME}\" --user root \\\n            --exec /usr/sbin/service docker start > /dev/null 2>&1\n    fi\nfi\n" >> ~/.bashrc'
+wsl -d Ubuntu-24.04 -- bash -c 'grep -q "service docker status" ~/.bashrc || echo "
+# Auto-start Docker service in WSL
+if grep -q microsoft /proc/version > /dev/null 2>&1; then
+    if service docker status 2>&1 | grep -q is.not.running; then
+        wsl.exe --distribution Ubuntu-24.04 --user root --exec /usr/sbin/service docker start > /dev/null 2>&1
+    fi
+fi" >> ~/.bashrc' | Out-Null
 Write-Check "Docker auto-start added to .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Starting Docker service..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo service docker start'
+wsl -d Ubuntu-24.04 -- bash -c 'sudo service docker start' | Out-Null
 Write-Check "Docker service started" ($LASTEXITCODE -eq 0) | Out-Null
 
 # --- Configure .bashrc and Docker login ---
@@ -442,6 +453,13 @@ Write-Check "Kiro CLI installer completed" ($LASTEXITCODE -eq 0) | Out-Null
     Write-Host ""
     Write-Host "  Skipping Kiro CLI installation." -ForegroundColor DarkGray
 }
+
+# ============================================================
+# CLEANUP: Remove temporary passwordless sudo
+# ============================================================
+Write-Host ""
+Write-Host "  Removing temporary passwordless sudo..." -ForegroundColor DarkGray
+wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/sudoers.d/temp-setup' | Out-Null
 
 # ============================================================
 # FINAL VERIFICATION
