@@ -287,13 +287,7 @@ wsl -d Ubuntu-24.04 -- bash -c 'sudo usermod -aG docker $USER' | Out-Null
 Write-Check "User added to docker group" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding Docker auto-start to .bashrc..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'grep -q "service docker status" ~/.bashrc || echo "
-# Auto-start Docker service in WSL
-if grep -q microsoft /proc/version > /dev/null 2>&1; then
-    if service docker status 2>&1 | grep -q is.not.running; then
-        wsl.exe --distribution Ubuntu-24.04 --user root --exec /usr/sbin/service docker start > /dev/null 2>&1
-    fi
-fi" >> ~/.bashrc' | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'grep -q "service docker status" ~/.bashrc || printf "\n# Auto-start Docker service in WSL\nif grep -q microsoft /proc/version > /dev/null 2>&1; then\n    if service docker status 2>&1 | grep -q \"is not running\"; then\n        wsl.exe --distribution Ubuntu-24.04 --user root --exec /usr/sbin/service docker start > /dev/null 2>&1\n    fi\nfi\n" >> ~/.bashrc' | Out-Null
 Write-Check "Docker auto-start added to .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Starting Docker service..." -ForegroundColor Yellow
