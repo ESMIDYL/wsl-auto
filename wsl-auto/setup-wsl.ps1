@@ -313,27 +313,27 @@ Write-Check "Kiro CLI installer completed" ($LASTEXITCODE -eq 0) | Out-Null
 # ============================================================
 Write-Step "Final Verification"
 
-$dnsCheck = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf' 2>$null
-$dnsOk = ($dnsCheck -match "193.181.14.10")
+$dnsCheck = (wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf') 2>$null | Out-String
+$dnsOk = [bool]($dnsCheck -match "193.181.14.10")
 Write-Check "DNS: 193.181.14.10 present in resolv.conf" $dnsOk | Out-Null
 
-$confCheck = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/wsl.conf' 2>$null
-$confOk = ($confCheck -match "generateResolvConf=false")
+$confCheck = (wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/wsl.conf') 2>$null | Out-String
+$confOk = [bool]($confCheck -match "generateResolvConf=false")
 Write-Check "wsl.conf: generateResolvConf=false" $confOk | Out-Null
 
-$systemdOk = ($confCheck -match "systemd=true")
+$systemdOk = [bool]($confCheck -match "systemd=true")
 Write-Check "wsl.conf: systemd=true" $systemdOk | Out-Null
 
-$kiroCheck = wsl -d Ubuntu-24.04 -- bash -c 'export PATH="$HOME/.local/bin:$PATH" && which kiro 2>/dev/null'
-$kiroOk = ($LASTEXITCODE -eq 0 -and $kiroCheck -ne "")
+$kiroCheck = (wsl -d Ubuntu-24.04 -- bash -c 'export PATH="$HOME/.local/bin:$PATH" && which kiro 2>/dev/null') 2>$null | Out-String
+$kiroOk = [bool]($kiroCheck -match "kiro")
 if ($kiroOk) {
     Write-Check "Kiro CLI installed" $true | Out-Null
 }
 
-$dockerCheck = wsl -d Ubuntu-24.04 -- bash -c 'docker --version 2>/dev/null'
-$dockerOk = ($LASTEXITCODE -eq 0 -and $dockerCheck -ne "")
+$dockerCheck = (wsl -d Ubuntu-24.04 -- bash -c 'docker --version 2>/dev/null') 2>$null | Out-String
+$dockerOk = [bool]($dockerCheck -match "Docker")
 if ($dockerOk) {
-    Write-Check "Docker installed ($dockerCheck)" $true | Out-Null
+    Write-Check "Docker installed" $true | Out-Null
 }
 
 Write-Host ""
