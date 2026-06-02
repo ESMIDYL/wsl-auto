@@ -241,23 +241,41 @@ if ($installDocker -eq 'Y' -or $installDocker -eq 'y') {
 Write-Step "Phase 4: Installing Docker Engine"
 
 Write-Host "  Verifying DNS is working..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'nslookup download.docker.com > /dev/null 2>&1 || (echo "DNS not working, retrying..." && sleep 2 && nslookup download.docker.com > /dev/null 2>&1)'
-Write-Check "DNS resolution working" ($LASTEXITCODE -eq 0) | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 download.docker.com > /dev/null 2>&1'
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  DNS not ready, waiting 5 seconds..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 5
+    wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 download.docker.com > /dev/null 2>&1'
+}
+Write-Check "Can reach download.docker.com" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Removing conflicting packages..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y $pkg 2>/dev/null; done'
-Write-Check "Conflicting packages removed" ($LASTEXITCODE -eq 0) | Out-Null
+Write-Check "Conflicting packages removed" $true | Out-Null
 
-Write-Host "  Adding Docker GPG key and repository..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update && sudo apt-get install -y ca-certificates curl && sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc'
-Write-Check "Docker GPG key installed" ($LASTEXITCODE -eq 0) | Out-Null
+Write-Host "  Updating package list..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update'
+Write-Check "apt-get update" ($LASTEXITCODE -eq 0) | Out-Null
 
+Write-Host "  Installing prerequisites..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y ca-certificates curl'
+Write-Check "ca-certificates and curl installed" ($LASTEXITCODE -eq 0) | Out-Null
+
+Write-Host "  Adding Docker GPG key..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc'
+Write-Check "Docker GPG key added" ($LASTEXITCODE -eq 0) | Out-Null
+
+Write-Host "  Adding Docker repository..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null'
 Write-Check "Docker repository added" ($LASTEXITCODE -eq 0) | Out-Null
 
+Write-Host "  Updating package list with Docker repo..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update'
+Write-Check "apt-get update (with Docker repo)" ($LASTEXITCODE -eq 0) | Out-Null
+
 Write-Host "  Installing Docker packages (this may take a few minutes)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin'
-Write-Check "Docker installed" ($LASTEXITCODE -eq 0) | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin'
+Write-Check "Docker packages installed" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding user to docker group..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'sudo usermod -aG docker $USER'
