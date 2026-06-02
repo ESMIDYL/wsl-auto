@@ -57,7 +57,9 @@ function Confirm-DistroInstalled {
     try {
         $list = wsl --list --quiet 2>$null
         if ($null -eq $list) { return $false }
-        return [bool]($list -match $Distro)
+        # WSL output contains hidden Unicode chars - clean them
+        $cleaned = ($list | Out-String) -replace '\x00','' -replace '[^\x20-\x7E\r\n]',''
+        return [bool]($cleaned -match $Distro)
     } catch {
         return $false
     }
@@ -165,7 +167,7 @@ if (-not $ubuntuInstalled) {
 
     Write-Host "  Running wsl --install..." -ForegroundColor Yellow
     wsl.exe --install --no-launch
-    Write-Check "wsl --install completed" ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 1) | Out-Null
+    Write-Check "wsl --install completed" ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 1 -or $LASTEXITCODE -eq -1) | Out-Null
 
     Write-Host "  Setting WSL default version to 2..." -ForegroundColor Yellow
     wsl --set-default-version 2
@@ -174,10 +176,17 @@ if (-not $ubuntuInstalled) {
     Write-Host "  Installing Ubuntu-24.04 (this may take a few minutes)..." -ForegroundColor Yellow
     wsl --install -d Ubuntu-24.04 --no-launch
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ERROR: Failed to install Ubuntu-24.04 (exit code $LASTEXITCODE)" -ForegroundColor Red
-        return
+        # Check if it failed because it already exists (that's fine)
+        $checkAgain = Confirm-DistroInstalled "Ubuntu-24.04"
+        if ($checkAgain) {
+            Write-Check "Ubuntu-24.04 already installed" $true | Out-Null
+        } else {
+            Write-Host "  ERROR: Failed to install Ubuntu-24.04 (exit code $LASTEXITCODE)" -ForegroundColor Red
+            return
+        }
+    } else {
+        Write-Check "Ubuntu-24.04 downloaded" $true | Out-Null
     }
-    Write-Check "Ubuntu-24.04 downloaded" $true | Out-Null
 
     Write-Host ""
     Write-Host "  ============================================" -ForegroundColor Green
