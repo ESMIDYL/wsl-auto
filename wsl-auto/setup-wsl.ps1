@@ -217,9 +217,11 @@ if (-not $ubuntuInstalled) {
 Write-Step "Phase 3: Configuring DNS and wsl.conf"
 
 # Enable passwordless sudo for this setup session (avoids repeated password prompts)
-Write-Host "  Enabling passwordless sudo for setup (enter your Ubuntu password below)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- sudo bash -c 'echo "$(logname) ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/temp-setup'
-Write-Check "Passwordless sudo enabled" ($LASTEXITCODE -eq 0) | Out-Null
+Write-Host "  Enabling passwordless sudo for setup..." -ForegroundColor Yellow
+$wslUser = (wsl -d Ubuntu-24.04 -- whoami) 2>$null | Out-String
+$wslUser = $wslUser.Trim()
+wsl -d Ubuntu-24.04 --user root -- bash -c "echo '$wslUser ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/temp-setup && chmod 440 /etc/sudoers.d/temp-setup" 2>&1 | Out-Null
+Write-Check "Passwordless sudo enabled for $wslUser" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Setting /etc/resolv.conf (Ericsson DNS)..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' 2>&1 | Out-Null
