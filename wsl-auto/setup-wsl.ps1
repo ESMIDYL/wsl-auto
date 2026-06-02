@@ -217,8 +217,8 @@ if (-not $ubuntuInstalled) {
 Write-Step "Phase 3: Configuring DNS and wsl.conf"
 
 # Enable passwordless sudo for this setup session (avoids repeated password prompts)
-Write-Host "  Enabling passwordless sudo for setup (you may need to enter your password once)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'echo "$(whoami) ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/temp-setup > /dev/null' 2>&1 | Out-Null
+Write-Host "  Enabling passwordless sudo for setup (enter your Ubuntu password below)..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'echo "$(whoami) ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/temp-setup > /dev/null'
 Write-Check "Passwordless sudo enabled" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Setting /etc/resolv.conf (Ericsson DNS)..." -ForegroundColor Yellow
