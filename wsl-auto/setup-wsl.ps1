@@ -189,7 +189,8 @@ if (-not $ubuntuInstalled) {
     Write-Host "  >>> USE YOUR ERICSSON SIGNUM AS THE USERNAME <<<" -ForegroundColor Magenta
     Write-Host ""
     Write-Host "  Set a password you'll remember." -ForegroundColor Yellow
-    Write-Host "  Once done, type 'exit' and the script continues." -ForegroundColor Yellow
+    Write-Host "  Once done, type 'exit' and run this command AGAIN" -ForegroundColor Yellow
+    Write-Host "  to continue with DNS, Docker, and Kiro setup." -ForegroundColor Yellow
     Write-Host ""
     Read-Host "  Press Enter to launch Ubuntu"
 
@@ -202,6 +203,12 @@ if (-not $ubuntuInstalled) {
         return
     }
     Write-Check "Ubuntu-24.04 registered in WSL" $true | Out-Null
+
+    Write-Host ""
+    Write-Host "  User created! Now run the SAME COMMAND again" -ForegroundColor Yellow
+    Write-Host "  to finish setup (DNS, Docker, Kiro)." -ForegroundColor Yellow
+    Write-Host ""
+    return
 }
 
 # ============================================================
@@ -210,13 +217,11 @@ if (-not $ubuntuInstalled) {
 Write-Step "Phase 3: Configuring DNS and wsl.conf"
 
 Write-Host "  Setting /etc/resolv.conf (Ericsson DNS)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "sudo rm -rf /etc/resolv.conf && echo 'nameserver 193.181.14.10
-nameserver 193.181.14.11
-nameserver 8.8.8.8' | sudo tee /etc/resolv.conf > /dev/null"
+wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null'
 Write-Check "resolv.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Setting /etc/wsl.conf..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "sudo rm -rf /etc/wsl.conf && printf '[network]\ngenerateResolvConf=false\n[boot]\nsystemd=true\n' | sudo tee /etc/wsl.conf > /dev/null"
+wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/wsl.conf && printf "[network]\ngenerateResolvConf=false\n[boot]\nsystemd=true\n" | sudo tee /etc/wsl.conf > /dev/null'
 Write-Check "wsl.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
 # ============================================================
@@ -256,7 +261,7 @@ $dockerAutoStart | wsl -d Ubuntu-24.04 -- bash
 Write-Check "Docker auto-start added to .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Starting Docker service..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "sudo service docker start"
+wsl -d Ubuntu-24.04 -- bash -c 'sudo service docker start'
 Write-Check "Docker service started" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host ""
@@ -279,11 +284,11 @@ if ($installKiro -eq 'Y' -or $installKiro -eq 'y') {
 Write-Step "Phase 5: Installing Kiro CLI"
 
 Write-Host "  Installing unzip..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "sudo apt-get install -y unzip"
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y unzip'
 Write-Check "unzip installed" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding ~/.local/bin to PATH..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "grep -q 'HOME/.local/bin' ~/.bashrc || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc"
+wsl -d Ubuntu-24.04 -- bash -c 'grep -q "HOME/.local/bin" ~/.bashrc || echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> ~/.bashrc'
 Write-Check "PATH updated in .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Downloading and installing Kiro CLI..." -ForegroundColor Yellow
@@ -295,7 +300,7 @@ Write-Host "    - Region: eu-west-1" -ForegroundColor White
 Write-Host ""
 Read-Host "  Press Enter to start Kiro CLI installation"
 
-wsl -d Ubuntu-24.04 -- bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\" && curl -fsSL https://cli.kiro.dev/install | bash"
+wsl -d Ubuntu-24.04 -- bash -c 'export PATH="$HOME/.local/bin:$PATH" && curl -fsSL https://cli.kiro.dev/install | bash'
 Write-Check "Kiro CLI installer completed" ($LASTEXITCODE -eq 0) | Out-Null
 
 } else {
@@ -308,24 +313,24 @@ Write-Check "Kiro CLI installer completed" ($LASTEXITCODE -eq 0) | Out-Null
 # ============================================================
 Write-Step "Final Verification"
 
-$dnsCheck = wsl -d Ubuntu-24.04 -- bash -c "cat /etc/resolv.conf" 2>$null
+$dnsCheck = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf' 2>$null
 $dnsOk = ($dnsCheck -match "193.181.14.10")
 Write-Check "DNS: 193.181.14.10 present in resolv.conf" $dnsOk | Out-Null
 
-$confCheck = wsl -d Ubuntu-24.04 -- bash -c "cat /etc/wsl.conf" 2>$null
+$confCheck = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/wsl.conf' 2>$null
 $confOk = ($confCheck -match "generateResolvConf=false")
 Write-Check "wsl.conf: generateResolvConf=false" $confOk | Out-Null
 
 $systemdOk = ($confCheck -match "systemd=true")
 Write-Check "wsl.conf: systemd=true" $systemdOk | Out-Null
 
-$kiroCheck = wsl -d Ubuntu-24.04 -- bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\" && which kiro 2>/dev/null"
+$kiroCheck = wsl -d Ubuntu-24.04 -- bash -c 'export PATH="$HOME/.local/bin:$PATH" && which kiro 2>/dev/null'
 $kiroOk = ($LASTEXITCODE -eq 0 -and $kiroCheck -ne "")
 if ($kiroOk) {
     Write-Check "Kiro CLI installed" $true | Out-Null
 }
 
-$dockerCheck = wsl -d Ubuntu-24.04 -- bash -c "docker --version 2>/dev/null"
+$dockerCheck = wsl -d Ubuntu-24.04 -- bash -c 'docker --version 2>/dev/null'
 $dockerOk = ($LASTEXITCODE -eq 0 -and $dockerCheck -ne "")
 if ($dockerOk) {
     Write-Check "Docker installed ($dockerCheck)" $true | Out-Null
@@ -333,7 +338,7 @@ if ($dockerOk) {
 
 Write-Host ""
 Write-Host "  Testing network: ping gerrit-gamma.gic.ericsson.se..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c "ping -c 3 gerrit-gamma.gic.ericsson.se" 2>$null
+wsl -d Ubuntu-24.04 -- bash -c 'ping -c 3 gerrit-gamma.gic.ericsson.se' 2>$null
 $pingOk = ($LASTEXITCODE -eq 0)
 Write-Check "Ping gerrit-gamma.gic.ericsson.se" $pingOk | Out-Null
 
@@ -356,4 +361,3 @@ Write-Host "  Launch Ubuntu anytime:" -ForegroundColor Cyan
 Write-Host "    - Start Menu -> Ubuntu 24.04" -ForegroundColor White
 Write-Host "    - Or run:  wsl -d Ubuntu-24.04" -ForegroundColor White
 Write-Host ""
-
