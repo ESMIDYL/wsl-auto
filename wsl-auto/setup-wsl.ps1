@@ -395,9 +395,15 @@ if (-not $preReqOk) {
 }
 
 Write-Host "  Adding Docker GPG key..." -ForegroundColor Yellow
-$gpgScript = 'sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc && echo SUCCESS || echo FAILED'
-$gpgB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($gpgScript))
-$gpgResult = wsl -d Ubuntu-24.04 -- bash -c "echo $gpgB64 | base64 -d | bash"
+$gpgScript = @'
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo SUCCESS
+'@
+$gpgBytes = [System.Text.Encoding]::UTF8.GetBytes($gpgScript.Replace("`r`n", "`n"))
+$gpgB64 = [Convert]::ToBase64String($gpgBytes)
+$gpgResult = wsl -d Ubuntu-24.04 --user root -- bash -c "echo $gpgB64 | base64 -d > /tmp/docker-gpg.sh && bash /tmp/docker-gpg.sh"
 $gpgOk = [bool]($gpgResult -match "SUCCESS")
 Write-Check "Docker GPG key added" $gpgOk | Out-Null
 if (-not $gpgOk) {
@@ -407,13 +413,21 @@ if (-not $gpgOk) {
 }
 
 Write-Host "  Adding Docker repository..." -ForegroundColor Yellow
-$repoScript = 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && echo SUCCESS || echo FAILED'
-$repoB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($repoScript))
-$repoResult = wsl -d Ubuntu-24.04 -- bash -c "echo $repoB64 | base64 -d | bash"
+$repoScript = @'
+ARCH=$(dpkg --print-architecture)
+. /etc/os-release
+CODENAME="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
+echo "deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $CODENAME stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+echo SUCCESS
+'@
+$repoBytes = [System.Text.Encoding]::UTF8.GetBytes($repoScript.Replace("`r`n", "`n"))
+$repoB64 = [Convert]::ToBase64String($repoBytes)
+$repoResult = wsl -d Ubuntu-24.04 --user root -- bash -c "echo $repoB64 | base64 -d > /tmp/docker-repo.sh && bash /tmp/docker-repo.sh"
 $repoOk = [bool]($repoResult -match "SUCCESS")
 Write-Check "Docker repository added" $repoOk | Out-Null
 if (-not $repoOk) {
     Write-Host "  ERROR: Failed to add Docker repo." -ForegroundColor Red
+    Write-Host "  Output: $repoResult" -ForegroundColor DarkGray
     return
 }
 
