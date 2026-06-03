@@ -567,25 +567,29 @@ function reset {
 }
 "@
 
-        # Encode as base64 to safely pass through PowerShell -> WSL without any quoting/heredoc issues
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($bashrcBlock.Replace("`r`n", "`n"))
-        $b64 = [Convert]::ToBase64String($bytes)
+        # Write directly to .bashrc via the \\wsl$ UNC path (no WSL command needed)
+        $bashrcContent = $bashrcBlock.Replace("`r`n", "`n")
+        $wslUser = (wsl -d Ubuntu-24.04 -- whoami 2>$null).Trim()
+        $bashrcPath = "\\wsl$\Ubuntu-24.04\home\$wslUser\.bashrc"
 
-        # Write base64 to a temp file inside WSL via UNC path, then decode (avoids command line length limits)
-        $wslUncTmp = "\\wsl$\Ubuntu-24.04\tmp\bashrc_block.b64"
-        try {
-            [System.IO.File]::WriteAllText($wslUncTmp, $b64)
-            wsl -d Ubuntu-24.04 -- bash -c "base64 -d /tmp/bashrc_block.b64 >> ~/.bashrc && rm -f /tmp/bashrc_block.b64" 2>&1 | Out-Null
-        } catch {
-            # Fallback: write in smaller chunks via multiple echo commands
-            Write-Host "  UNC path not available, using chunked write..." -ForegroundColor DarkGray
-            $chunkSize = 2000
-            wsl -d Ubuntu-24.04 -- bash -c "rm -f /tmp/bashrc_block.b64" 2>&1 | Out-Null
-            for ($i = 0; $i -lt $b64.Length; $i += $chunkSize) {
-                $chunk = $b64.Substring($i, [Math]::Min($chunkSize, $b64.Length - $i))
-                wsl -d Ubuntu-24.04 -- bash -c "echo -n '$chunk' >> /tmp/bashrc_block.b64" 2>&1 | Out-Null
+        if (Test-Path $bashrcPath) {
+            # Append to existing .bashrc via Windows filesystem
+            $existingContent = [System.IO.File]::ReadAllText($bashrcPath)
+            $newContent = $existingContent + $bashrcContent
+            [System.IO.File]::WriteAllText($bashrcPath, $newContent.Replace("`r`n", "`n"))
+            Write-Check ".bashrc environment configured" $true | Out-Null
+        } else {
+            Write-Host "  Cannot access .bashrc via UNC path, trying WSL command..." -ForegroundColor Yellow
+            # Fallback: write a temp script file and source it
+            $scriptContent = $bashrcContent
+            $scriptPath = "\\wsl$\Ubuntu-24.04\tmp\bashrc_append.txt"
+            try {
+                [System.IO.File]::WriteAllText($scriptPath, $scriptContent)
+                wsl -d Ubuntu-24.04 -- bash -c "cat /tmp/bashrc_append.txt >> ~/.bashrc && rm -f /tmp/bashrc_append.txt" 2>&1 | Out-Null
+                Write-Check ".bashrc environment configured" ($LASTEXITCODE -eq 0) | Out-Null
+            } catch {
+                Write-Host "  ERROR: Could not write .bashrc: $_" -ForegroundColor Red
             }
-            wsl -d Ubuntu-24.04 -- bash -c "base64 -d /tmp/bashrc_block.b64 >> ~/.bashrc && rm -f /tmp/bashrc_block.b64" 2>&1 | Out-Null
         }
         Write-Check ".bashrc environment configured" ($LASTEXITCODE -eq 0) | Out-Null
     }
