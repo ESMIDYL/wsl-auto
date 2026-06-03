@@ -332,11 +332,8 @@ if ($signum -and $seroToken -and $seliToken) {
         Write-Host "  .bashrc already has Ericsson config - skipping to avoid duplicates." -ForegroundColor Yellow
         Write-Check ".bashrc already configured" $true | Out-Null
     } else {
-        # Write the bashrc config script to a temp file inside WSL
-        # We use multiple wsl calls to avoid heredoc issues with PowerShell -> WSL passthrough
-        $bashrcContent = @"
-#!/bin/bash
-cat >> ~/.bashrc << 'EOF'
+        # Build the bashrc block with actual values substituted
+        $bashrcBlock = @"
 
 # ============================================================
 # Ericsson Environment Configuration
@@ -349,9 +346,9 @@ alias pushmaster='git push origin HEAD:refs/for/master'
 alias pushdraft='git push origin HEAD:refs/drafts/master'
 
 # Credentials
-export SIGNUM="PLACEHOLDER_SIGNUM"
-export SERO_TOKEN="PLACEHOLDER_SERO"
-export SELI_TOKEN="PLACEHOLDER_SELI"
+export SIGNUM="$signum"
+export SERO_TOKEN="$seroToken"
+export SELI_TOKEN="$seliToken"
 
 export PATH=/home/`$SIGNUM/bob:`$PATH
 export HELM_USER=`$SIGNUM
@@ -390,27 +387,15 @@ function reset {
   kubectl delete namespace `$K8_NAMESPACE && kubectl create namespace `$K8_NAMESPACE || kubectl create namespace `$K8_NAMESPACE
   kubectl create secret generic `$IMAGE_SECRET --from-file=.dockerconfigjson=`$HOME/.docker/config.json --type=kubernetes.io/dockerconfigjson --namespace `$K8_NAMESPACE || true
 }
-EOF
 "@
 
-        # Write the script content to a temp file on Windows, then copy into WSL
-        $tempFile = "$env:TEMP\wsl_bashrc_setup.sh"
-        $bashrcContent | Set-Content -Path $tempFile -Encoding UTF8 -NoNewline
-        # Convert to Unix line endings and copy into WSL
-        $wslTempPath = wsl -d Ubuntu-24.04 -- wslpath -u ($tempFile -replace '\\','/')
-        wsl -d Ubuntu-24.04 -- bash -c "cp '$wslTempPath' /tmp/setup_bashrc.sh && sed -i 's/\r//' /tmp/setup_bashrc.sh && chmod +x /tmp/setup_bashrc.sh" 2>&1 | Out-Null
+        # Encode as base64 to safely pass through PowerShell -> WSL without any quoting/heredoc issues
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($bashrcBlock.Replace("`r`n", "`n"))
+        $b64 = [Convert]::ToBase64String($bytes)
 
-        # Replace placeholders with actual values
-        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's/PLACEHOLDER_SIGNUM/$signum/g' /tmp/setup_bashrc.sh" 2>&1 | Out-Null
-        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's|PLACEHOLDER_SERO|$seroToken|g' /tmp/setup_bashrc.sh" 2>&1 | Out-Null
-        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's|PLACEHOLDER_SELI|$seliToken|g' /tmp/setup_bashrc.sh" 2>&1 | Out-Null
-
-        # Run it
-        wsl -d Ubuntu-24.04 -- bash -c 'bash /tmp/setup_bashrc.sh && rm /tmp/setup_bashrc.sh' 2>&1 | Out-Null
+        # Decode inside WSL and append to .bashrc
+        wsl -d Ubuntu-24.04 -- bash -c "echo $b64 | base64 -d >> ~/.bashrc" 2>&1 | Out-Null
         Write-Check ".bashrc environment configured" ($LASTEXITCODE -eq 0) | Out-Null
-
-        # Clean up Windows temp file
-        Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
     }
 
     # Docker login using the provided credentials
