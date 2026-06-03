@@ -458,16 +458,16 @@ Write-Host "  When finished, type 'exit' to return here." -ForegroundColor Magen
 Write-Host ""
 Read-Host "  Press Enter to begin Kiro setup"
 
-# Download and install the Kiro binary first
-Write-Host "  Downloading Kiro CLI..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'export PATH="$HOME/.local/bin:$PATH" && curl -fsSL https://cli.kiro.dev/install | bash'
-
-# Now launch a proper interactive shell so user can run kiro and get prompted
+# Launch interactive Ubuntu shell - user runs the install command themselves
+# This ensures proper TTY for interactive prompts
 Write-Host ""
-Write-Host "  ============================================" -ForegroundColor Cyan
-Write-Host "  Kiro is installed. Now run 'kiro' below to" -ForegroundColor Cyan
-Write-Host "  complete the setup. Type 'exit' when done." -ForegroundColor Cyan
-Write-Host "  ============================================" -ForegroundColor Cyan
+Write-Host "  ============================================" -ForegroundColor Magenta
+Write-Host "  Copy and paste this command into Ubuntu:" -ForegroundColor Magenta
+Write-Host "" -ForegroundColor White
+Write-Host "  curl -fsSL https://cli.kiro.dev/install | bash" -ForegroundColor White
+Write-Host "" -ForegroundColor White
+Write-Host "  Then type 'exit' when setup is complete." -ForegroundColor Magenta
+Write-Host "  ============================================" -ForegroundColor Magenta
 Write-Host ""
 wsl -d Ubuntu-24.04
 Write-Check "Kiro CLI setup completed" ($LASTEXITCODE -eq 0) | Out-Null
