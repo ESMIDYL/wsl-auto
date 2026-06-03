@@ -395,16 +395,21 @@ if (-not $preReqOk) {
 }
 
 Write-Host "  Adding Docker GPG key..." -ForegroundColor Yellow
-$gpgResult = wsl -d Ubuntu-24.04 -- bash -c 'sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc && echo SUCCESS || echo FAILED'
+$gpgScript = 'sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc && echo SUCCESS || echo FAILED'
+$gpgB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($gpgScript))
+$gpgResult = wsl -d Ubuntu-24.04 -- bash -c "echo $gpgB64 | base64 -d | bash"
 $gpgOk = [bool]($gpgResult -match "SUCCESS")
 Write-Check "Docker GPG key added" $gpgOk | Out-Null
 if (-not $gpgOk) {
     Write-Host "  ERROR: Failed to add Docker GPG key. Check network connectivity." -ForegroundColor Red
+    Write-Host "  Output: $gpgResult" -ForegroundColor DarkGray
     return
 }
 
 Write-Host "  Adding Docker repository..." -ForegroundColor Yellow
-$repoResult = wsl -d Ubuntu-24.04 -- bash -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && echo SUCCESS || echo FAILED'
+$repoScript = 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && echo SUCCESS || echo FAILED'
+$repoB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($repoScript))
+$repoResult = wsl -d Ubuntu-24.04 -- bash -c "echo $repoB64 | base64 -d | bash"
 $repoOk = [bool]($repoResult -match "SUCCESS")
 Write-Check "Docker repository added" $repoOk | Out-Null
 if (-not $repoOk) {
@@ -434,7 +439,7 @@ if (-not $dockerInstOk) {
 }
 
 Write-Host "  Adding user to docker group..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo usermod -aG docker $USER'
+wsl -d Ubuntu-24.04 --user root -- bash -c "usermod -aG docker $(wsl -d Ubuntu-24.04 -- whoami)"
 Write-Check "User added to docker group" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Enabling and starting Docker with systemd..." -ForegroundColor Yellow
