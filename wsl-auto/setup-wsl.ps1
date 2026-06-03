@@ -218,13 +218,19 @@ Write-Step "Phase 3: Configuring DNS and wsl.conf"
 
 # Enable passwordless sudo for this setup session (avoids repeated password prompts)
 Write-Host "  Enabling passwordless sudo for setup..." -ForegroundColor Yellow
-$wslUser = (wsl -d Ubuntu-24.04 -- whoami) 2>$null | Out-String
+# Get the default user safely without sourcing .bashrc (use root + getent)
+$wslUser = (wsl -d Ubuntu-24.04 --user root -- sh -c "getent passwd | awk -F: '\$3 >= 1000 && \$3 < 65534 {print \$1; exit}'") | Out-String
 $wslUser = $wslUser.Trim()
-wsl -d Ubuntu-24.04 --user root -- bash -c "echo '$wslUser ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/temp-setup && chmod 440 /etc/sudoers.d/temp-setup" 2>&1 | Out-Null
+if (-not $wslUser) {
+    # Second fallback: check /etc/passwd directly
+    $wslUser = (wsl -d Ubuntu-24.04 --user root -- sh -c "awk -F: '\$3 >= 1000 && \$3 < 65534 {print \$1; exit}' /etc/passwd") | Out-String
+    $wslUser = $wslUser.Trim()
+}
+wsl -d Ubuntu-24.04 --user root -- sh -c "echo '$wslUser ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/temp-setup && chmod 440 /etc/sudoers.d/temp-setup" 2>&1 | Out-Null
 Write-Check "Passwordless sudo enabled for $wslUser" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Setting /etc/resolv.conf (Ericsson DNS)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- sh -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
 Write-Check "resolv.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Setting /etc/wsl.conf (with boot command for DNS)..." -ForegroundColor Yellow
@@ -233,21 +239,21 @@ Write-Host "  Setting /etc/wsl.conf (with boot command for DNS)..." -ForegroundC
 $wslConfContent = "[network]`ngenerateResolvConf=false`n[boot]`nsystemd=true`ncommand=/bin/bash -c 'rm -f /etc/resolv.conf && echo nameserver 193.181.14.10 > /etc/resolv.conf && echo nameserver 193.181.14.11 >> /etc/resolv.conf && echo nameserver 8.8.8.8 >> /etc/resolv.conf'`n"
 $wslConfBytes = [System.Text.Encoding]::UTF8.GetBytes($wslConfContent.Replace("`r`n", "`n"))
 $wslConfB64 = [Convert]::ToBase64String($wslConfBytes)
-wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/wsl.conf && echo $wslConfB64 | base64 -d > /etc/wsl.conf" 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- sh -c "rm -f /etc/wsl.conf && echo $wslConfB64 | base64 -d > /etc/wsl.conf" 2>&1 | Out-Null
 Write-Check "wsl.conf configured (with boot DNS command)" ($LASTEXITCODE -eq 0) | Out-Null
 
 # Verify wsl.conf was written correctly
-$wslConfCheck = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/wsl.conf 2>/dev/null'
+$wslConfCheck = wsl -d Ubuntu-24.04 --user root -- sh -c 'cat /etc/wsl.conf 2>/dev/null'
 Write-Host "  wsl.conf content:" -ForegroundColor DarkGray
 Write-Host "  $wslConfCheck" -ForegroundColor DarkGray
 
 Write-Host "  Disabling systemd-resolved (prevents DNS override)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 --user root -- bash -c "systemctl stop systemd-resolved 2>/dev/null; systemctl disable systemd-resolved 2>/dev/null; systemctl mask systemd-resolved 2>/dev/null; rm -f /run/systemd/resolve/stub-resolv.conf 2>/dev/null; rm -f /etc/resolv.conf" 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- sh -c "systemctl stop systemd-resolved 2>/dev/null; systemctl disable systemd-resolved 2>/dev/null; systemctl mask systemd-resolved 2>/dev/null; rm -f /run/systemd/resolve/stub-resolv.conf 2>/dev/null; rm -f /etc/resolv.conf" 2>&1 | Out-Null
 Write-Check "systemd-resolved disabled and masked" ($LASTEXITCODE -eq 0) | Out-Null
 
 # Write resolv.conf now (before restart) using the proven method
 Write-Host "  Writing resolv.conf before restart..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- sh -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
 
 Write-Host "  Restarting WSL to apply wsl.conf changes..." -ForegroundColor Yellow
 wsl --terminate Ubuntu-24.04 2>&1 | Out-Null
@@ -255,12 +261,12 @@ Start-Sleep -Seconds 6
 
 # The boot command in wsl.conf should have created resolv.conf on startup
 Write-Host "  Verifying resolv.conf after restart..." -ForegroundColor Yellow
-$postRestartResolv = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
+$postRestartResolv = wsl -d Ubuntu-24.04 --user root -- sh -c 'cat /etc/resolv.conf 2>/dev/null'
 if ($postRestartResolv -notmatch "193.181.14.10") {
     Write-Host "  Boot command didn't write resolv.conf - writing manually..." -ForegroundColor Yellow
-    wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
+    wsl -d Ubuntu-24.04 --user root -- sh -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
     Start-Sleep -Seconds 1
-    $postRestartResolv = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
+    $postRestartResolv = wsl -d Ubuntu-24.04 --user root -- sh -c 'cat /etc/resolv.conf 2>/dev/null'
 }
 
 $resolvOk = [bool]($postRestartResolv -match "193.181.14.10")
@@ -268,7 +274,7 @@ Write-Check "resolv.conf verified after restart" $resolvOk | Out-Null
 if (-not $resolvOk) {
     Write-Host "  WARNING: resolv.conf still not correct after restart." -ForegroundColor Yellow
     Write-Host "  Content: '$postRestartResolv'" -ForegroundColor DarkGray
-    $linkCheck = wsl -d Ubuntu-24.04 -- bash -c 'ls -la /etc/resolv.conf 2>&1'
+    $linkCheck = wsl -d Ubuntu-24.04 --user root -- sh -c 'ls -la /etc/resolv.conf 2>&1'
     Write-Host "  File info: $linkCheck" -ForegroundColor DarkGray
 }
 
@@ -284,13 +290,13 @@ Write-Step "Phase 4: Installing Docker Engine"
 Write-Host "  Ensuring resolv.conf exists and is correct..." -ForegroundColor Yellow
 
 # First, make sure systemd-resolved isn't running and fighting us
-wsl -d Ubuntu-24.04 --user root -- bash -c "systemctl stop systemd-resolved 2>/dev/null; systemctl mask systemd-resolved 2>/dev/null; true" 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- sh -c "systemctl stop systemd-resolved 2>/dev/null; systemctl mask systemd-resolved 2>/dev/null; true" 2>&1 | Out-Null
 
 # Force-remove any symlink or stale file and recreate using simple echo (proven to work)
-wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf"
+wsl -d Ubuntu-24.04 --user root -- sh -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf"
 
 # Verify it was written
-$resolveCheck = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
+$resolveCheck = wsl -d Ubuntu-24.04 --user root -- sh -c 'cat /etc/resolv.conf 2>/dev/null'
 if ($resolveCheck -match "193.181.14.10") {
     Write-Check "resolv.conf written correctly" $true | Out-Null
 } else {
@@ -306,7 +312,7 @@ $dnsRetries = 0
 $dnsOk = $false
 while ($dnsRetries -lt 5 -and -not $dnsOk) {
     # Try DNS resolution via getent (doesn't need ICMP), then nslookup, then dig
-    $dnsResult = wsl -d Ubuntu-24.04 -- bash -c 'getent hosts download.docker.com > /dev/null 2>&1 && echo OK || (nslookup download.docker.com 193.181.14.10 > /dev/null 2>&1 && echo OK || (host download.docker.com 193.181.14.10 > /dev/null 2>&1 && echo OK || echo FAIL))'
+    $dnsResult = wsl -d Ubuntu-24.04 --user root -- sh -c 'getent hosts download.docker.com > /dev/null 2>&1 && echo OK || (nslookup download.docker.com 193.181.14.10 > /dev/null 2>&1 && echo OK || (host download.docker.com 193.181.14.10 > /dev/null 2>&1 && echo OK || echo FAIL))'
     if ($dnsResult -match "OK") {
         $dnsOk = $true
     } else {
@@ -315,11 +321,11 @@ while ($dnsRetries -lt 5 -and -not $dnsOk) {
         # On retry, also try forcing the nameserver directly in case resolv.conf isn't being read
         if ($dnsRetries -ge 3) {
             Write-Host "  Trying direct DNS query to 8.8.8.8..." -ForegroundColor Yellow
-            $directDns = wsl -d Ubuntu-24.04 -- bash -c 'nslookup download.docker.com 8.8.8.8 > /dev/null 2>&1 && echo OK || echo FAIL'
+            $directDns = wsl -d Ubuntu-24.04 --user root -- sh -c 'nslookup download.docker.com 8.8.8.8 > /dev/null 2>&1 && echo OK || echo FAIL'
             if ($directDns -match "OK") {
                 Write-Host "  Google DNS (8.8.8.8) works! The Ericsson DNS may be unreachable." -ForegroundColor Yellow
                 Write-Host "  Updating resolv.conf to prioritize 8.8.8.8..." -ForegroundColor Yellow
-                wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 8.8.8.8 > /etc/resolv.conf; echo nameserver 193.181.14.10 >> /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf"
+                wsl -d Ubuntu-24.04 --user root -- sh -c "rm -f /etc/resolv.conf; echo nameserver 8.8.8.8 > /etc/resolv.conf; echo nameserver 193.181.14.10 >> /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf"
                 $dnsOk = $true
             }
         }
@@ -331,7 +337,7 @@ while ($dnsRetries -lt 5 -and -not $dnsOk) {
 if ($dnsOk) {
     Write-Check "DNS resolves download.docker.com" $true | Out-Null
     Write-Host "  Checking HTTPS connectivity to download.docker.com..." -ForegroundColor Yellow
-    $httpResult = wsl -d Ubuntu-24.04 -- bash -c 'curl -fsSL --connect-timeout 10 -o /dev/null -w "%{http_code}" https://download.docker.com/linux/ubuntu/gpg 2>/dev/null'
+    $httpResult = wsl -d Ubuntu-24.04 --user root -- sh -c 'curl -fsSL --connect-timeout 10 -o /dev/null -w "%{http_code}" https://download.docker.com/linux/ubuntu/gpg 2>/dev/null'
     if ($httpResult -match "200") {
         Write-Check "HTTPS connectivity to download.docker.com" $true | Out-Null
     } else {
@@ -344,16 +350,16 @@ if ($dnsOk) {
     Write-Host "  ERROR: Cannot resolve download.docker.com" -ForegroundColor Red
     Write-Host ""
     Write-Host "  Diagnostics:" -ForegroundColor Yellow
-    $diagResolv = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>&1'
+    $diagResolv = wsl -d Ubuntu-24.04 --user root -- sh -c 'cat /etc/resolv.conf 2>&1'
     Write-Host "    /etc/resolv.conf content:" -ForegroundColor DarkGray
     Write-Host "    $diagResolv" -ForegroundColor DarkGray
-    $diagNs = wsl -d Ubuntu-24.04 -- bash -c 'nslookup download.docker.com 8.8.8.8 2>&1'
+    $diagNs = wsl -d Ubuntu-24.04 --user root -- sh -c 'nslookup download.docker.com 8.8.8.8 2>&1'
     Write-Host "    nslookup (via 8.8.8.8):" -ForegroundColor DarkGray
     Write-Host "    $diagNs" -ForegroundColor DarkGray
-    $diagNs2 = wsl -d Ubuntu-24.04 -- bash -c 'nslookup download.docker.com 193.181.14.10 2>&1'
+    $diagNs2 = wsl -d Ubuntu-24.04 --user root -- sh -c 'nslookup download.docker.com 193.181.14.10 2>&1'
     Write-Host "    nslookup (via Ericsson DNS):" -ForegroundColor DarkGray
     Write-Host "    $diagNs2" -ForegroundColor DarkGray
-    $diagRoute = wsl -d Ubuntu-24.04 -- bash -c 'ip route show default 2>&1'
+    $diagRoute = wsl -d Ubuntu-24.04 --user root -- sh -c 'ip route show default 2>&1'
     Write-Host "    Default route:" -ForegroundColor DarkGray
     Write-Host "    $diagRoute" -ForegroundColor DarkGray
     Write-Host ""
@@ -371,11 +377,11 @@ if ($dnsOk) {
 }
 
 Write-Host "  Removing conflicting packages..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y $pkg 2>/dev/null; done; true'
+wsl -d Ubuntu-24.04 --user root -- sh -c 'for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do apt-get remove -y $pkg 2>/dev/null; done; true'
 Write-Check "Conflicting packages removed" $true | Out-Null
 
 Write-Host "  Updating package list..." -ForegroundColor Yellow
-$aptResult = wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update -qq 2>&1 && echo SUCCESS || echo FAILED'
+$aptResult = wsl -d Ubuntu-24.04 --user root -- sh -c 'apt-get update -qq 2>&1 && echo SUCCESS || echo FAILED'
 $aptOk = [bool]($aptResult -match "SUCCESS")
 Write-Check "apt-get update" $aptOk | Out-Null
 if (-not $aptOk) {
@@ -385,7 +391,7 @@ if (-not $aptOk) {
 }
 
 Write-Host "  Installing prerequisites..." -ForegroundColor Yellow
-$preReqResult = wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y ca-certificates curl gnupg 2>&1 && echo SUCCESS || echo FAILED'
+$preReqResult = wsl -d Ubuntu-24.04 --user root -- sh -c 'apt-get install -y ca-certificates curl gnupg 2>&1 && echo SUCCESS || echo FAILED'
 $preReqOk = [bool]($preReqResult -match "SUCCESS")
 Write-Check "ca-certificates, curl, gnupg installed" $preReqOk | Out-Null
 if (-not $preReqOk) {
@@ -403,7 +409,7 @@ echo SUCCESS
 '@
 $gpgBytes = [System.Text.Encoding]::UTF8.GetBytes($gpgScript.Replace("`r`n", "`n"))
 $gpgB64 = [Convert]::ToBase64String($gpgBytes)
-$gpgResult = wsl -d Ubuntu-24.04 --user root -- bash -c "echo $gpgB64 | base64 -d > /tmp/docker-gpg.sh && bash /tmp/docker-gpg.sh"
+$gpgResult = wsl -d Ubuntu-24.04 --user root -- sh -c "echo $gpgB64 | base64 -d > /tmp/docker-gpg.sh && sh /tmp/docker-gpg.sh"
 $gpgOk = [bool]($gpgResult -match "SUCCESS")
 Write-Check "Docker GPG key added" $gpgOk | Out-Null
 if (-not $gpgOk) {
@@ -422,7 +428,7 @@ echo SUCCESS
 '@
 $repoBytes = [System.Text.Encoding]::UTF8.GetBytes($repoScript.Replace("`r`n", "`n"))
 $repoB64 = [Convert]::ToBase64String($repoBytes)
-$repoResult = wsl -d Ubuntu-24.04 --user root -- bash -c "echo $repoB64 | base64 -d > /tmp/docker-repo.sh && bash /tmp/docker-repo.sh"
+$repoResult = wsl -d Ubuntu-24.04 --user root -- sh -c "echo $repoB64 | base64 -d > /tmp/docker-repo.sh && sh /tmp/docker-repo.sh"
 $repoOk = [bool]($repoResult -match "SUCCESS")
 Write-Check "Docker repository added" $repoOk | Out-Null
 if (-not $repoOk) {
@@ -432,7 +438,7 @@ if (-not $repoOk) {
 }
 
 Write-Host "  Updating package list with Docker repo..." -ForegroundColor Yellow
-$aptResult2 = wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update -qq 2>&1 && echo SUCCESS || echo FAILED'
+$aptResult2 = wsl -d Ubuntu-24.04 --user root -- sh -c 'apt-get update -qq 2>&1 && echo SUCCESS || echo FAILED'
 $aptOk2 = [bool]($aptResult2 -match "SUCCESS")
 Write-Check "apt-get update (with Docker repo)" $aptOk2 | Out-Null
 if (-not $aptOk2) {
@@ -442,7 +448,7 @@ if (-not $aptOk2) {
 }
 
 Write-Host "  Installing Docker packages (this may take a few minutes)..." -ForegroundColor Yellow
-$dockerInstResult = wsl -d Ubuntu-24.04 -- bash -c 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>&1 && echo SUCCESS || echo FAILED'
+$dockerInstResult = wsl -d Ubuntu-24.04 --user root -- sh -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>&1 && echo SUCCESS || echo FAILED'
 $dockerInstOk = [bool]($dockerInstResult -match "SUCCESS")
 Write-Check "Docker packages installed" $dockerInstOk | Out-Null
 if (-not $dockerInstOk) {
@@ -453,24 +459,24 @@ if (-not $dockerInstOk) {
 }
 
 Write-Host "  Adding user to docker group..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 --user root -- bash -c "usermod -aG docker $(wsl -d Ubuntu-24.04 -- whoami)"
+wsl -d Ubuntu-24.04 --user root -- sh -c "usermod -aG docker $wslUser"
 Write-Check "User added to docker group" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Enabling and starting Docker with systemd..." -ForegroundColor Yellow
 # Since systemd=true is set in wsl.conf, use systemctl
-$svcResult = wsl -d Ubuntu-24.04 -- bash -c 'sudo systemctl enable docker 2>&1 && sudo systemctl start docker 2>&1 && echo SUCCESS || echo FAILED'
+$svcResult = wsl -d Ubuntu-24.04 --user root -- sh -c 'systemctl enable docker 2>&1 && systemctl start docker 2>&1 && echo SUCCESS || echo FAILED'
 $svcOk = [bool]($svcResult -match "SUCCESS")
 if (-not $svcOk) {
     # Fallback to service command if systemd isn't fully booted yet
     Write-Host "  systemctl failed (systemd may not be ready), trying service command..." -ForegroundColor Yellow
-    $svcResult2 = wsl -d Ubuntu-24.04 -- bash -c 'sudo service docker start 2>&1 && echo SUCCESS || echo FAILED'
+    $svcResult2 = wsl -d Ubuntu-24.04 --user root -- sh -c 'service docker start 2>&1 && echo SUCCESS || echo FAILED'
     $svcOk = [bool]($svcResult2 -match "SUCCESS")
 }
 Write-Check "Docker service started" $svcOk | Out-Null
 
 Write-Host "  Verifying Docker works..." -ForegroundColor Yellow
 Start-Sleep -Seconds 3
-$dockerVerify = wsl -d Ubuntu-24.04 -- bash -c 'sudo docker version --format "{{.Server.Version}}" 2>/dev/null'
+$dockerVerify = wsl -d Ubuntu-24.04 --user root -- sh -c 'docker version --format "{{.Server.Version}}" 2>/dev/null'
 $dockerRunning = [bool]($dockerVerify -match "\d+\.\d+")
 Write-Check "Docker daemon responding" $dockerRunning | Out-Null
 if (-not $dockerRunning) {
@@ -504,8 +510,8 @@ if ($signum -and $seroToken -and $seliToken) {
     Write-Host ""
     Write-Host "  Writing environment config to .bashrc..." -ForegroundColor Yellow
 
-    # Check if already configured
-    $alreadyDone = wsl -d Ubuntu-24.04 -- bash -c 'grep -q "Ericsson Environment Configuration" ~/.bashrc && echo "YES" || echo "NO"'
+    # Check if already configured (use sh to avoid sourcing .bashrc which may be broken)
+    $alreadyDone = wsl -d Ubuntu-24.04 --user root -- sh -c 'grep -q "Ericsson Environment Configuration" /home/*/.[b]ashrc 2>/dev/null && echo YES || echo NO'
     if ($alreadyDone -match "YES") {
         Write-Host "  .bashrc already has Ericsson config - skipping to avoid duplicates." -ForegroundColor Yellow
         Write-Check ".bashrc already configured" $true | Out-Null
@@ -580,21 +586,27 @@ reset() {
         $bashrcBlock = $bashrcBlock -replace '__SERO_TOKEN__', $escapedSeroToken
         $bashrcBlock = $bashrcBlock -replace '__SELI_TOKEN__', $escapedSeliToken
 
-        # Write to .bashrc using base64 encoding (avoids all quoting/path issues)
+        # Write to .bashrc using base64 encoding via sh (not bash) to avoid sourcing .bashrc
         $bashrcContent = $bashrcBlock.Replace("`r`n", "`n")
         $bashrcBytes = [System.Text.Encoding]::UTF8.GetBytes($bashrcContent)
         $bashrcB64 = [Convert]::ToBase64String($bashrcBytes)
-        wsl -d Ubuntu-24.04 -- bash -c "echo $bashrcB64 | base64 -d >> ~/.bashrc" 2>&1 | Out-Null
+        
+        # Get the target user's home directory using root + sh (no .bashrc sourced)
+        $targetHome = (wsl -d Ubuntu-24.04 --user root -- sh -c "getent passwd $wslUser | cut -d: -f6") | Out-String
+        $targetHome = $targetHome.Trim()
+        if (-not $targetHome) { $targetHome = "/home/$wslUser" }
+        
+        wsl -d Ubuntu-24.04 --user root -- sh -c "echo $bashrcB64 | base64 -d >> $targetHome/.bashrc"
         $bashrcWriteOk = ($LASTEXITCODE -eq 0)
         Write-Check ".bashrc environment configured" $bashrcWriteOk | Out-Null
     }
 
     # Docker login using the provided credentials
     Write-Host "  Logging into Ericsson ARM Docker registry..." -ForegroundColor Yellow
-    # Use base64 encoding to safely pass the token (avoids issues with special characters in tokens)
+    # Use base64 encoding to safely pass the token via sh (not bash) to avoid .bashrc hang
     $tokenBytes = [System.Text.Encoding]::UTF8.GetBytes($seliToken)
     $tokenB64 = [Convert]::ToBase64String($tokenBytes)
-    $loginResult = wsl -d Ubuntu-24.04 -- bash -c "echo $tokenB64 | base64 -d | docker login armdocker.rnd.ericsson.se -u $signum --password-stdin 2>&1"
+    $loginResult = wsl -d Ubuntu-24.04 --user root -- sh -c "echo $tokenB64 | base64 -d | docker login armdocker.rnd.ericsson.se -u $signum --password-stdin 2>&1"
     $loginOk = [bool]($loginResult -match "Login Succeeded")
     Write-Check "Docker login to armdocker.rnd.ericsson.se" $loginOk | Out-Null
     if (-not $loginOk) {
@@ -622,21 +634,24 @@ if ($installKiro -eq 'Y' -or $installKiro -eq 'y') {
 Write-Step "Phase 5: Installing Kiro CLI"
 
 Write-Host "  Verifying DNS before Kiro install..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 cli.kiro.dev > /dev/null 2>&1' 2>$null
+wsl -d Ubuntu-24.04 --user root -- sh -c 'ping -c 1 cli.kiro.dev > /dev/null 2>&1' 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  DNS not resolving - re-applying resolv.conf..." -ForegroundColor Yellow
-    wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
+    wsl -d Ubuntu-24.04 --user root -- sh -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
     Start-Sleep -Seconds 2
-    wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 cli.kiro.dev > /dev/null 2>&1' 2>$null
+    wsl -d Ubuntu-24.04 --user root -- sh -c 'ping -c 1 cli.kiro.dev > /dev/null 2>&1' 2>$null
 }
 Write-Check "DNS resolving for cli.kiro.dev" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Installing unzip..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y -qq unzip' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- sh -c 'apt-get install -y -qq unzip' 2>&1 | Out-Null
 Write-Check "unzip installed" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding ~/.local/bin to PATH..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'grep -q "HOME/.local/bin" ~/.bashrc || echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> ~/.bashrc' 2>&1 | Out-Null
+$targetHome2 = (wsl -d Ubuntu-24.04 --user root -- sh -c "getent passwd $wslUser | cut -d: -f6") | Out-String
+$targetHome2 = $targetHome2.Trim()
+if (-not $targetHome2) { $targetHome2 = "/home/$wslUser" }
+wsl -d Ubuntu-24.04 --user root -- sh -c "grep -q 'HOME/.local/bin' $targetHome2/.bashrc || echo 'export PATH="'$'"HOME/.local/bin:"'$'"PATH"' >> $targetHome2/.bashrc" 2>&1 | Out-Null
 Write-Check "PATH updated in .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host ""
@@ -682,37 +697,37 @@ Write-Check "Kiro CLI setup completed" ($LASTEXITCODE -eq 0) | Out-Null
 # ============================================================
 Write-Host ""
 Write-Host "  Removing temporary passwordless sudo..." -ForegroundColor DarkGray
-wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/sudoers.d/temp-setup' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- sh -c 'rm -f /etc/sudoers.d/temp-setup' 2>&1 | Out-Null
 
 # ============================================================
 # FINAL VERIFICATION
 # ============================================================
 Write-Step "Final Verification"
 
-$dnsCheck = (wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf') 2>$null | Out-String
+$dnsCheck = (wsl -d Ubuntu-24.04 --user root -- sh -c 'cat /etc/resolv.conf') 2>$null | Out-String
 $dnsOk = [bool]($dnsCheck -match "193.181.14.10")
 if (-not $dnsOk) {
     Write-Host "  DNS missing - re-applying resolv.conf..." -ForegroundColor Yellow
-    wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
-    $dnsCheck = (wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf') 2>$null | Out-String
+    wsl -d Ubuntu-24.04 --user root -- sh -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
+    $dnsCheck = (wsl -d Ubuntu-24.04 --user root -- sh -c 'cat /etc/resolv.conf') 2>$null | Out-String
     $dnsOk = [bool]($dnsCheck -match "193.181.14.10")
 }
 Write-Check "DNS: 193.181.14.10 present in resolv.conf" $dnsOk | Out-Null
 
-$confCheck = (wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/wsl.conf') 2>$null | Out-String
+$confCheck = (wsl -d Ubuntu-24.04 --user root -- sh -c 'cat /etc/wsl.conf') 2>$null | Out-String
 $confOk = [bool]($confCheck -match "generateResolvConf=false")
 Write-Check "wsl.conf: generateResolvConf=false" $confOk | Out-Null
 
 $systemdOk = [bool]($confCheck -match "systemd=true")
 Write-Check "wsl.conf: systemd=true" $systemdOk | Out-Null
 
-$kiroCheck = (wsl -d Ubuntu-24.04 -- bash -c 'export PATH="$HOME/.local/bin:$PATH" && which kiro 2>/dev/null') 2>$null | Out-String
+$kiroCheck = (wsl -d Ubuntu-24.04 --user root -- sh -c "test -f $targetHome2/.local/bin/kiro && echo kiro") 2>$null | Out-String
 $kiroOk = [bool]($kiroCheck -match "kiro")
 if ($kiroOk) {
     Write-Check "Kiro CLI installed" $true | Out-Null
 }
 
-$dockerCheck = (wsl -d Ubuntu-24.04 -- bash -c 'docker --version 2>/dev/null') 2>$null | Out-String
+$dockerCheck = (wsl -d Ubuntu-24.04 --user root -- sh -c 'docker --version 2>/dev/null') 2>$null | Out-String
 $dockerOk = [bool]($dockerCheck -match "Docker")
 if ($dockerOk) {
     Write-Check "Docker installed" $true | Out-Null
@@ -720,7 +735,7 @@ if ($dockerOk) {
 
 Write-Host ""
 Write-Host "  Testing network: ping gerrit-gamma.gic.ericsson.se..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'ping -c 3 gerrit-gamma.gic.ericsson.se' 2>$null
+wsl -d Ubuntu-24.04 --user root -- sh -c 'ping -c 3 gerrit-gamma.gic.ericsson.se' 2>$null
 $pingOk = ($LASTEXITCODE -eq 0)
 Write-Check "Ping gerrit-gamma.gic.ericsson.se" $pingOk | Out-Null
 
