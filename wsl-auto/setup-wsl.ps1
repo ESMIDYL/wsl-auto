@@ -510,7 +510,14 @@ if ($signum -and $seroToken -and $seliToken) {
         Write-Host "  .bashrc already has Ericsson config - skipping to avoid duplicates." -ForegroundColor Yellow
         Write-Check ".bashrc already configured" $true | Out-Null
     } else {
-        # Build the bashrc block with actual values substituted
+        # Escape single quotes in token values for safe embedding in bash single-quoted strings
+        # Replace ' with '\'' (end quote, escaped quote, start quote)
+        $escapedSeroToken = $seroToken -replace "'", "'\\''"
+        $escapedSeliToken = $seliToken -replace "'", "'\\''"
+        $escapedSignum = $signum -replace "'", "'\\''"
+
+        # Build the bashrc block using single quotes around credential values
+        # to prevent bash from interpreting special characters in tokens
         $bashrcBlock = @"
 
 # ============================================================
@@ -523,31 +530,31 @@ alias rebase='git pull --rebase origin master'
 alias pushmaster='git push origin HEAD:refs/for/master'
 alias pushdraft='git push origin HEAD:refs/drafts/master'
 
-# Credentials
-export SIGNUM="$signum"
-export SERO_TOKEN="$seroToken"
-export SELI_TOKEN="$seliToken"
+# Credentials (single-quoted to prevent interpretation of special chars)
+export SIGNUM='$escapedSignum'
+export SERO_TOKEN='$escapedSeroToken'
+export SELI_TOKEN='$escapedSeliToken'
 
-export PATH=/home/`$SIGNUM/bob:`$PATH
-export HELM_USER=`$SIGNUM
-export KUBECONFIG=/home/`$SIGNUM/.kube/config
+export PATH="/home/`$SIGNUM/bob:`$PATH"
+export HELM_USER="`$SIGNUM"
+export KUBECONFIG="/home/`$SIGNUM/.kube/config"
 
 export IMAGE_SECRET=armdocker
 
-export K8_NAMESPACE=`$SIGNUM
-export K8S_NAMESPACE=`$SIGNUM
+export K8_NAMESPACE="`$SIGNUM"
+export K8S_NAMESPACE="`$SIGNUM"
 
-export HELM_REPO_API_TOKEN=`$SELI_TOKEN
+export HELM_REPO_API_TOKEN="`$SELI_TOKEN"
 export HELM_INSTALL_TIMEOUT=5m0s
 
-export ARM_USER=`$SIGNUM
-export ARM_TOKEN=`$SELI_TOKEN
+export ARM_USER="`$SIGNUM"
+export ARM_TOKEN="`$SELI_TOKEN"
 
-export SELI_ARTIFACTORY_REPO_USER=`$SIGNUM
-export SELI_ARTIFACTORY_REPO_PASS=`$SELI_TOKEN
+export SELI_ARTIFACTORY_REPO_USER="`$SIGNUM"
+export SELI_ARTIFACTORY_REPO_PASS="`$SELI_TOKEN"
 
-export SERO_ARTIFACTORY_REPO_USER=`$SIGNUM
-export SERO_ARTIFACTORY_REPO_PASS=`$SERO_TOKEN
+export SERO_ARTIFACTORY_REPO_USER="`$SIGNUM"
+export SERO_ARTIFACTORY_REPO_PASS="`$SERO_TOKEN"
 
 # run bob commands to build your project and package a helm chart
 bob-pack() {
@@ -560,25 +567,33 @@ rmi () {
 }
 
 # uninstall everything and reset namespace
-function reset {
+reset() {
   helm delete `$(helm ls --short --namespace `$K8_NAMESPACE) --namespace `$K8_NAMESPACE
   kubectl delete namespace `$K8_NAMESPACE && kubectl create namespace `$K8_NAMESPACE || kubectl create namespace `$K8_NAMESPACE
-  kubectl create secret generic `$IMAGE_SECRET --from-file=.dockerconfigjson=`$HOME/.docker/config.json --type=kubernetes.io/dockerconfigjson --namespace `$K8_NAMESPACE || true
+  kubectl create secret generic `$IMAGE_SECRET --from-file=.dockerconfigjson="`$HOME/.docker/config.json" --type=kubernetes.io/dockerconfigjson --namespace `$K8_NAMESPACE || true
 }
 "@
 
-        # Encode as base64 to safely pass through PowerShell -> WSL without any quoting/heredoc issues
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($bashrcBlock.Replace("`r`n", "`n"))
-        $b64 = [Convert]::ToBase64String($bytes)
-
-        # Decode inside WSL and append to .bashrc
-        wsl -d Ubuntu-24.04 -- bash -c "echo $b64 | base64 -d >> ~/.bashrc" 2>&1 | Out-Null
-        Write-Check ".bashrc environment configured" ($LASTEXITCODE -eq 0) | Out-Null
+        # Write directly to .bashrc via Windows temp file copied into WSL
+        $bashrcContent = $bashrcBlock.Replace("`r`n", "`n")
+        $tmpFile = [System.IO.Path]::GetTempFileName()
+        [System.IO.File]::WriteAllBytes($tmpFile, [System.Text.Encoding]::UTF8.GetBytes($bashrcContent))
+        
+        # Convert Windows temp path to WSL path and copy content
+        $winTmpPath = $tmpFile -replace '\\', '/'
+        $wslTmpPath = "/mnt/" + $winTmpPath.Substring(0,1).ToLower() + $winTmpPath.Substring(2)
+        wsl -d Ubuntu-24.04 -- bash -c "cat '$wslTmpPath' >> ~/.bashrc" 2>&1 | Out-Null
+        $bashrcWriteOk = ($LASTEXITCODE -eq 0)
+        Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+        Write-Check ".bashrc environment configured" $bashrcWriteOk | Out-Null
     }
 
     # Docker login using the provided credentials
     Write-Host "  Logging into Ericsson ARM Docker registry..." -ForegroundColor Yellow
-    $loginResult = wsl -d Ubuntu-24.04 -- bash -c "echo '$seliToken' | docker login armdocker.rnd.ericsson.se -u $signum --password-stdin 2>&1"
+    # Use base64 encoding to safely pass the token (avoids issues with special characters in tokens)
+    $tokenBytes = [System.Text.Encoding]::UTF8.GetBytes($seliToken)
+    $tokenB64 = [Convert]::ToBase64String($tokenBytes)
+    $loginResult = wsl -d Ubuntu-24.04 -- bash -c "echo $tokenB64 | base64 -d | docker login armdocker.rnd.ericsson.se -u $signum --password-stdin 2>&1"
     $loginOk = [bool]($loginResult -match "Login Succeeded")
     Write-Check "Docker login to armdocker.rnd.ericsson.se" $loginOk | Out-Null
     if (-not $loginOk) {
