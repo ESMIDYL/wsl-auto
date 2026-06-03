@@ -516,9 +516,10 @@ if ($signum -and $seroToken -and $seliToken) {
         $escapedSeliToken = $seliToken -replace "'", "'\\''"
         $escapedSignum = $signum -replace "'", "'\\''"
 
-        # Build the bashrc block using single quotes around credential values
-        # to prevent bash from interpreting special characters in tokens
-        $bashrcBlock = @"
+        # Build the bashrc block using a non-interpolating here-string first,
+        # then substitute the credential placeholders manually.
+        # This prevents PowerShell from misinterpreting $ in token values.
+        $bashrcTemplate = @'
 
 # ============================================================
 # Ericsson Environment Configuration
@@ -531,30 +532,30 @@ alias pushmaster='git push origin HEAD:refs/for/master'
 alias pushdraft='git push origin HEAD:refs/drafts/master'
 
 # Credentials (single-quoted to prevent interpretation of special chars)
-export SIGNUM='$escapedSignum'
-export SERO_TOKEN='$escapedSeroToken'
-export SELI_TOKEN='$escapedSeliToken'
+export SIGNUM='__SIGNUM__'
+export SERO_TOKEN='__SERO_TOKEN__'
+export SELI_TOKEN='__SELI_TOKEN__'
 
-export PATH="/home/`$SIGNUM/bob:`$PATH"
-export HELM_USER="`$SIGNUM"
-export KUBECONFIG="/home/`$SIGNUM/.kube/config"
+export PATH="/home/$SIGNUM/bob:$PATH"
+export HELM_USER="$SIGNUM"
+export KUBECONFIG="/home/$SIGNUM/.kube/config"
 
 export IMAGE_SECRET=armdocker
 
-export K8_NAMESPACE="`$SIGNUM"
-export K8S_NAMESPACE="`$SIGNUM"
+export K8_NAMESPACE="$SIGNUM"
+export K8S_NAMESPACE="$SIGNUM"
 
-export HELM_REPO_API_TOKEN="`$SELI_TOKEN"
+export HELM_REPO_API_TOKEN="$SELI_TOKEN"
 export HELM_INSTALL_TIMEOUT=5m0s
 
-export ARM_USER="`$SIGNUM"
-export ARM_TOKEN="`$SELI_TOKEN"
+export ARM_USER="$SIGNUM"
+export ARM_TOKEN="$SELI_TOKEN"
 
-export SELI_ARTIFACTORY_REPO_USER="`$SIGNUM"
-export SELI_ARTIFACTORY_REPO_PASS="`$SELI_TOKEN"
+export SELI_ARTIFACTORY_REPO_USER="$SIGNUM"
+export SELI_ARTIFACTORY_REPO_PASS="$SELI_TOKEN"
 
-export SERO_ARTIFACTORY_REPO_USER="`$SIGNUM"
-export SERO_ARTIFACTORY_REPO_PASS="`$SERO_TOKEN"
+export SERO_ARTIFACTORY_REPO_USER="$SIGNUM"
+export SERO_ARTIFACTORY_REPO_PASS="$SERO_TOKEN"
 
 # run bob commands to build your project and package a helm chart
 bob-pack() {
@@ -563,28 +564,28 @@ bob-pack() {
 
 # command to remove docker image by passing the image name
 rmi () {
-  docker rmi `$(docker images | grep "`$1")
+  docker rmi $(docker images | grep "$1")
 }
 
 # uninstall everything and reset namespace
 reset() {
-  helm delete `$(helm ls --short --namespace `$K8_NAMESPACE) --namespace `$K8_NAMESPACE
-  kubectl delete namespace `$K8_NAMESPACE && kubectl create namespace `$K8_NAMESPACE || kubectl create namespace `$K8_NAMESPACE
-  kubectl create secret generic `$IMAGE_SECRET --from-file=.dockerconfigjson="`$HOME/.docker/config.json" --type=kubernetes.io/dockerconfigjson --namespace `$K8_NAMESPACE || true
+  helm delete $(helm ls --short --namespace $K8_NAMESPACE) --namespace $K8_NAMESPACE
+  kubectl delete namespace $K8_NAMESPACE && kubectl create namespace $K8_NAMESPACE || kubectl create namespace $K8_NAMESPACE
+  kubectl create secret generic $IMAGE_SECRET --from-file=.dockerconfigjson="$HOME/.docker/config.json" --type=kubernetes.io/dockerconfigjson --namespace $K8_NAMESPACE || true
 }
-"@
+'@
 
-        # Write directly to .bashrc via Windows temp file copied into WSL
+        # Substitute placeholders with actual (escaped) values
+        $bashrcBlock = $bashrcTemplate -replace '__SIGNUM__', $escapedSignum
+        $bashrcBlock = $bashrcBlock -replace '__SERO_TOKEN__', $escapedSeroToken
+        $bashrcBlock = $bashrcBlock -replace '__SELI_TOKEN__', $escapedSeliToken
+
+        # Write to .bashrc using base64 encoding (avoids all quoting/path issues)
         $bashrcContent = $bashrcBlock.Replace("`r`n", "`n")
-        $tmpFile = [System.IO.Path]::GetTempFileName()
-        [System.IO.File]::WriteAllBytes($tmpFile, [System.Text.Encoding]::UTF8.GetBytes($bashrcContent))
-        
-        # Convert Windows temp path to WSL path and copy content
-        $winTmpPath = $tmpFile -replace '\\', '/'
-        $wslTmpPath = "/mnt/" + $winTmpPath.Substring(0,1).ToLower() + $winTmpPath.Substring(2)
-        wsl -d Ubuntu-24.04 -- bash -c "cat '$wslTmpPath' >> ~/.bashrc" 2>&1 | Out-Null
+        $bashrcBytes = [System.Text.Encoding]::UTF8.GetBytes($bashrcContent)
+        $bashrcB64 = [Convert]::ToBase64String($bashrcBytes)
+        wsl -d Ubuntu-24.04 -- bash -c "echo $bashrcB64 | base64 -d >> ~/.bashrc" 2>&1 | Out-Null
         $bashrcWriteOk = ($LASTEXITCODE -eq 0)
-        Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
         Write-Check ".bashrc environment configured" $bashrcWriteOk | Out-Null
     }
 
