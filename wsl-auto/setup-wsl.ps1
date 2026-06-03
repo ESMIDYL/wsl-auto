@@ -235,16 +235,33 @@ wsl -d Ubuntu-24.04 -- bash -c "sudo rm -f /etc/wsl.conf && echo $wslConfB64 | b
 Write-Check "wsl.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Disabling systemd-resolved (prevents DNS override)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo systemctl disable --now systemd-resolved 2>/dev/null; sudo systemctl mask systemd-resolved 2>/dev/null; sudo rm -f /etc/resolv.conf' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'sudo systemctl stop systemd-resolved 2>/dev/null; sudo systemctl disable systemd-resolved 2>/dev/null; sudo systemctl mask systemd-resolved 2>/dev/null; sudo rm -f /run/systemd/resolve/stub-resolv.conf 2>/dev/null' 2>&1 | Out-Null
 Write-Check "systemd-resolved disabled and masked" ($LASTEXITCODE -eq 0) | Out-Null
 
-Write-Host "  Restarting WSL to apply changes..." -ForegroundColor Yellow
+# Remove resolv.conf (may be a symlink to systemd-resolved stub) and write correct one BEFORE restart
+Write-Host "  Writing resolv.conf before restart..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 --user root -- bash -c 'rm -f /etc/resolv.conf; printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" > /etc/resolv.conf; chattr +i /etc/resolv.conf 2>/dev/null; true' 2>&1 | Out-Null
+
+Write-Host "  Restarting WSL to apply wsl.conf changes..." -ForegroundColor Yellow
 wsl --terminate Ubuntu-24.04 2>&1 | Out-Null
-Start-Sleep -Seconds 3
+Start-Sleep -Seconds 5
 
 Write-Host "  Re-applying /etc/resolv.conf after restart..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' 2>&1 | Out-Null
-Write-Check "resolv.conf re-applied" ($LASTEXITCODE -eq 0) | Out-Null
+# After restart, check if the file survived. If not (immutable flag lost on restart), rewrite it.
+$postRestartResolv = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
+if ($postRestartResolv -notmatch "193.181.14.10") {
+    Write-Host "  resolv.conf was lost after restart - rewriting..." -ForegroundColor Yellow
+    wsl -d Ubuntu-24.04 --user root -- bash -c 'rm -f /etc/resolv.conf; printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" > /etc/resolv.conf; chattr +i /etc/resolv.conf 2>/dev/null; true' 2>&1 | Out-Null
+}
+
+# Verify resolv.conf is correct
+$verifyResolv = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
+$resolvOk = [bool]($verifyResolv -match "193.181.14.10")
+Write-Check "resolv.conf verified after restart" $resolvOk | Out-Null
+if (-not $resolvOk) {
+    Write-Host "  WARNING: resolv.conf may not be correct. Content:" -ForegroundColor Yellow
+    Write-Host "  $verifyResolv" -ForegroundColor DarkGray
+}
 
 # ============================================================
 # PHASE 4: Install Docker Engine (optional)
@@ -255,28 +272,96 @@ if ($installDocker -eq 'Y' -or $installDocker -eq 'y') {
 Write-Step "Phase 4: Installing Docker Engine"
 
 # Ensure DNS is solid before we start
-Write-Host "  Ensuring DNS is configured..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null'
+Write-Host "  Ensuring resolv.conf exists and is correct..." -ForegroundColor Yellow
+
+# First, make sure systemd-resolved isn't running and fighting us
+wsl -d Ubuntu-24.04 --user root -- bash -c 'systemctl stop systemd-resolved 2>/dev/null; systemctl mask systemd-resolved 2>/dev/null; true' 2>&1 | Out-Null
+
+# Force-remove any symlink or stale file and recreate
+wsl -d Ubuntu-24.04 --user root -- bash -c 'chattr -i /etc/resolv.conf 2>/dev/null; rm -f /etc/resolv.conf; printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" > /etc/resolv.conf; chattr +i /etc/resolv.conf 2>/dev/null; true'
+
+# Verify it was written
+$resolveCheck = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
+if ($resolveCheck -match "193.181.14.10") {
+    Write-Check "resolv.conf written correctly" $true | Out-Null
+} else {
+    Write-Host "  WARNING: resolv.conf may not have been written. Content: $resolveCheck" -ForegroundColor Yellow
+    # Try a different approach - pipe through tee
+    wsl -d Ubuntu-24.04 --user root -- bash -c 'chattr -i /etc/resolv.conf 2>/dev/null; rm -f /etc/resolv.conf; echo -e "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8" | tee /etc/resolv.conf > /dev/null; chattr +i /etc/resolv.conf 2>/dev/null; true'
+    $resolveCheck2 = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
+    Write-Check "resolv.conf retry" ([bool]($resolveCheck2 -match "193.181.14.10")) | Out-Null
+}
+
 Start-Sleep -Seconds 2
 
-Write-Host "  Verifying DNS is working..." -ForegroundColor Yellow
+# Use getent/nslookup instead of ping (ICMP is often blocked on corporate networks)
+Write-Host "  Verifying DNS resolution works..." -ForegroundColor Yellow
 $dnsRetries = 0
 $dnsOk = $false
 while ($dnsRetries -lt 5 -and -not $dnsOk) {
-    $dnsResult = wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 -W 3 download.docker.com > /dev/null 2>&1 && echo OK || echo FAIL'
+    # Try DNS resolution via getent (doesn't need ICMP), then nslookup, then dig
+    $dnsResult = wsl -d Ubuntu-24.04 -- bash -c 'getent hosts download.docker.com > /dev/null 2>&1 && echo OK || (nslookup download.docker.com 193.181.14.10 > /dev/null 2>&1 && echo OK || (host download.docker.com 193.181.14.10 > /dev/null 2>&1 && echo OK || echo FAIL))'
     if ($dnsResult -match "OK") {
         $dnsOk = $true
     } else {
         $dnsRetries++
-        Write-Host "  DNS not ready, retrying ($dnsRetries/5)..." -ForegroundColor Yellow
+        Write-Host "  DNS not resolving, retrying ($dnsRetries/5)..." -ForegroundColor Yellow
+        # On retry, also try forcing the nameserver directly in case resolv.conf isn't being read
+        if ($dnsRetries -ge 3) {
+            Write-Host "  Trying direct DNS query to 8.8.8.8..." -ForegroundColor Yellow
+            $directDns = wsl -d Ubuntu-24.04 -- bash -c 'nslookup download.docker.com 8.8.8.8 > /dev/null 2>&1 && echo OK || echo FAIL'
+            if ($directDns -match "OK") {
+                Write-Host "  Google DNS (8.8.8.8) works! The Ericsson DNS may be unreachable." -ForegroundColor Yellow
+                Write-Host "  Updating resolv.conf to prioritize 8.8.8.8..." -ForegroundColor Yellow
+                wsl -d Ubuntu-24.04 --user root -- bash -c 'chattr -i /etc/resolv.conf 2>/dev/null; rm -f /etc/resolv.conf; printf "nameserver 8.8.8.8\nnameserver 193.181.14.10\nnameserver 193.181.14.11\n" > /etc/resolv.conf; chattr +i /etc/resolv.conf 2>/dev/null; true'
+                $dnsOk = $true
+            }
+        }
         Start-Sleep -Seconds 3
     }
 }
-Write-Check "Can reach download.docker.com" $dnsOk | Out-Null
-if (-not $dnsOk) {
-    Write-Host "  ERROR: Cannot reach download.docker.com. Check your network/DNS." -ForegroundColor Red
-    Write-Host "  Verify /etc/resolv.conf is correct and you're on the Ericsson network." -ForegroundColor Red
-    return
+
+# If DNS resolution works, also check HTTP connectivity
+if ($dnsOk) {
+    Write-Check "DNS resolves download.docker.com" $true | Out-Null
+    Write-Host "  Checking HTTPS connectivity to download.docker.com..." -ForegroundColor Yellow
+    $httpResult = wsl -d Ubuntu-24.04 -- bash -c 'curl -fsSL --connect-timeout 10 -o /dev/null -w "%{http_code}" https://download.docker.com/linux/ubuntu/gpg 2>/dev/null'
+    if ($httpResult -match "200") {
+        Write-Check "HTTPS connectivity to download.docker.com" $true | Out-Null
+    } else {
+        Write-Host "  WARNING: DNS works but HTTPS returned code: $httpResult" -ForegroundColor Yellow
+        Write-Host "  Continuing anyway - apt may still work via proxy..." -ForegroundColor Yellow
+    }
+} else {
+    Write-Check "DNS resolves download.docker.com" $false | Out-Null
+    Write-Host ""
+    Write-Host "  ERROR: Cannot resolve download.docker.com" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Diagnostics:" -ForegroundColor Yellow
+    $diagResolv = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>&1'
+    Write-Host "    /etc/resolv.conf content:" -ForegroundColor DarkGray
+    Write-Host "    $diagResolv" -ForegroundColor DarkGray
+    $diagNs = wsl -d Ubuntu-24.04 -- bash -c 'nslookup download.docker.com 8.8.8.8 2>&1'
+    Write-Host "    nslookup (via 8.8.8.8):" -ForegroundColor DarkGray
+    Write-Host "    $diagNs" -ForegroundColor DarkGray
+    $diagNs2 = wsl -d Ubuntu-24.04 -- bash -c 'nslookup download.docker.com 193.181.14.10 2>&1'
+    Write-Host "    nslookup (via Ericsson DNS):" -ForegroundColor DarkGray
+    Write-Host "    $diagNs2" -ForegroundColor DarkGray
+    $diagRoute = wsl -d Ubuntu-24.04 -- bash -c 'ip route show default 2>&1'
+    Write-Host "    Default route:" -ForegroundColor DarkGray
+    Write-Host "    $diagRoute" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  Possible fixes:" -ForegroundColor Yellow
+    Write-Host "    - Make sure you are connected to the Ericsson network (VPN/office)" -ForegroundColor White
+    Write-Host "    - Run: wsl --shutdown  (from PowerShell), then run this script again" -ForegroundColor White
+    Write-Host "    - If on VPN, your Windows DNS may need to forward to 193.181.14.10" -ForegroundColor White
+    Write-Host "    - Check if your Windows firewall is blocking WSL network traffic" -ForegroundColor White
+    Write-Host ""
+    $continueAnyway = Read-Host "  Try to continue anyway? (Y/N)"
+    if ($continueAnyway -ne 'Y' -and $continueAnyway -ne 'y') {
+        return
+    }
+    Write-Host "  Continuing despite DNS failure..." -ForegroundColor Yellow
 }
 
 Write-Host "  Removing conflicting packages..." -ForegroundColor Yellow
