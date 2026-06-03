@@ -228,7 +228,10 @@ wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/resolv.conf && printf "nameserv
 Write-Check "resolv.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Setting /etc/wsl.conf..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/wsl.conf && printf "[network]\ngenerateResolvConf=false\n[boot]\nsystemd=true\n" | sudo tee /etc/wsl.conf > /dev/null' 2>&1 | Out-Null
+$wslConfContent = "[network]`ngenerateResolvConf=false`n[boot]`nsystemd=true`n"
+$wslConfBytes = [System.Text.Encoding]::UTF8.GetBytes($wslConfContent.Replace("`r`n", "`n"))
+$wslConfB64 = [Convert]::ToBase64String($wslConfBytes)
+wsl -d Ubuntu-24.04 -- bash -c "sudo rm -f /etc/wsl.conf && echo $wslConfB64 | base64 -d | sudo tee /etc/wsl.conf > /dev/null" 2>&1 | Out-Null
 Write-Check "wsl.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Disabling systemd-resolved (prevents DNS override)..." -ForegroundColor Yellow
@@ -251,54 +254,119 @@ if ($installDocker -eq 'Y' -or $installDocker -eq 'y') {
 
 Write-Step "Phase 4: Installing Docker Engine"
 
+# Ensure DNS is solid before we start
+Write-Host "  Ensuring DNS is configured..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null'
+Start-Sleep -Seconds 2
+
 Write-Host "  Verifying DNS is working..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 download.docker.com > /dev/null 2>&1' 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  DNS not ready, waiting 5 seconds..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 5
-    wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 download.docker.com > /dev/null 2>&1' 2>$null
+$dnsRetries = 0
+$dnsOk = $false
+while ($dnsRetries -lt 5 -and -not $dnsOk) {
+    $dnsResult = wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 -W 3 download.docker.com > /dev/null 2>&1 && echo OK || echo FAIL'
+    if ($dnsResult -match "OK") {
+        $dnsOk = $true
+    } else {
+        $dnsRetries++
+        Write-Host "  DNS not ready, retrying ($dnsRetries/5)..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 3
+    }
 }
-Write-Check "Can reach download.docker.com" ($LASTEXITCODE -eq 0) | Out-Null
+Write-Check "Can reach download.docker.com" $dnsOk | Out-Null
+if (-not $dnsOk) {
+    Write-Host "  ERROR: Cannot reach download.docker.com. Check your network/DNS." -ForegroundColor Red
+    Write-Host "  Verify /etc/resolv.conf is correct and you're on the Ericsson network." -ForegroundColor Red
+    return
+}
 
 Write-Host "  Removing conflicting packages..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y $pkg 2>/dev/null; done' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y $pkg 2>/dev/null; done; true'
 Write-Check "Conflicting packages removed" $true | Out-Null
 
 Write-Host "  Updating package list..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update -qq 2>&1' 2>&1 | Out-Null
-Write-Check "apt-get update" ($LASTEXITCODE -eq 0) | Out-Null
+$aptResult = wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update -qq 2>&1 && echo SUCCESS || echo FAILED'
+$aptOk = [bool]($aptResult -match "SUCCESS")
+Write-Check "apt-get update" $aptOk | Out-Null
+if (-not $aptOk) {
+    Write-Host "  ERROR: apt-get update failed. Output:" -ForegroundColor Red
+    Write-Host "  $aptResult" -ForegroundColor DarkGray
+    return
+}
 
 Write-Host "  Installing prerequisites..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y -qq ca-certificates curl 2>&1' 2>&1 | Out-Null
-Write-Check "ca-certificates and curl installed" ($LASTEXITCODE -eq 0) | Out-Null
+$preReqResult = wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y ca-certificates curl gnupg 2>&1 && echo SUCCESS || echo FAILED'
+$preReqOk = [bool]($preReqResult -match "SUCCESS")
+Write-Check "ca-certificates, curl, gnupg installed" $preReqOk | Out-Null
+if (-not $preReqOk) {
+    Write-Host "  ERROR: Failed to install prerequisites. Output:" -ForegroundColor Red
+    Write-Host "  $preReqResult" -ForegroundColor DarkGray
+    return
+}
 
 Write-Host "  Adding Docker GPG key..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc' 2>&1 | Out-Null
-Write-Check "Docker GPG key added" ($LASTEXITCODE -eq 0) | Out-Null
+$gpgResult = wsl -d Ubuntu-24.04 -- bash -c 'sudo install -m 0755 -d /etc/apt/keyrings && sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc && echo SUCCESS || echo FAILED'
+$gpgOk = [bool]($gpgResult -match "SUCCESS")
+Write-Check "Docker GPG key added" $gpgOk | Out-Null
+if (-not $gpgOk) {
+    Write-Host "  ERROR: Failed to add Docker GPG key. Check network connectivity." -ForegroundColor Red
+    return
+}
 
 Write-Host "  Adding Docker repository..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null' 2>&1 | Out-Null
-Write-Check "Docker repository added" ($LASTEXITCODE -eq 0) | Out-Null
+$repoResult = wsl -d Ubuntu-24.04 -- bash -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && echo SUCCESS || echo FAILED'
+$repoOk = [bool]($repoResult -match "SUCCESS")
+Write-Check "Docker repository added" $repoOk | Out-Null
+if (-not $repoOk) {
+    Write-Host "  ERROR: Failed to add Docker repo." -ForegroundColor Red
+    return
+}
 
 Write-Host "  Updating package list with Docker repo..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update -qq 2>&1' 2>&1 | Out-Null
-Write-Check "apt-get update (with Docker repo)" ($LASTEXITCODE -eq 0) | Out-Null
+$aptResult2 = wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get update -qq 2>&1 && echo SUCCESS || echo FAILED'
+$aptOk2 = [bool]($aptResult2 -match "SUCCESS")
+Write-Check "apt-get update (with Docker repo)" $aptOk2 | Out-Null
+if (-not $aptOk2) {
+    Write-Host "  ERROR: apt-get update failed after adding Docker repo. Output:" -ForegroundColor Red
+    Write-Host "  $aptResult2" -ForegroundColor DarkGray
+    return
+}
 
 Write-Host "  Installing Docker packages (this may take a few minutes)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>&1' 2>&1 | Out-Null
-Write-Check "Docker packages installed" ($LASTEXITCODE -eq 0) | Out-Null
+$dockerInstResult = wsl -d Ubuntu-24.04 -- bash -c 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>&1 && echo SUCCESS || echo FAILED'
+$dockerInstOk = [bool]($dockerInstResult -match "SUCCESS")
+Write-Check "Docker packages installed" $dockerInstOk | Out-Null
+if (-not $dockerInstOk) {
+    Write-Host "  ERROR: Docker package installation failed. Output (last 20 lines):" -ForegroundColor Red
+    $lines = $dockerInstResult -split "`n"
+    $lines[-20..-1] | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    return
+}
 
 Write-Host "  Adding user to docker group..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo usermod -aG docker $USER' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'sudo usermod -aG docker $USER'
 Write-Check "User added to docker group" ($LASTEXITCODE -eq 0) | Out-Null
 
-Write-Host "  Adding Docker auto-start to .bashrc..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 --user root -- bash -c 'HOMEDIR=/home/$(ls /home | head -1) && grep -q "service docker status" "$HOMEDIR/.bashrc" || printf "\n# Auto-start Docker\nif grep -q microsoft /proc/version 2>/dev/null; then\n  if ! service docker status > /dev/null 2>&1; then\n    sudo service docker start > /dev/null 2>&1\n  fi\nfi\n" >> "$HOMEDIR/.bashrc"' 2>&1 | Out-Null
-Write-Check "Docker auto-start added to .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
+Write-Host "  Enabling and starting Docker with systemd..." -ForegroundColor Yellow
+# Since systemd=true is set in wsl.conf, use systemctl
+$svcResult = wsl -d Ubuntu-24.04 -- bash -c 'sudo systemctl enable docker 2>&1 && sudo systemctl start docker 2>&1 && echo SUCCESS || echo FAILED'
+$svcOk = [bool]($svcResult -match "SUCCESS")
+if (-not $svcOk) {
+    # Fallback to service command if systemd isn't fully booted yet
+    Write-Host "  systemctl failed (systemd may not be ready), trying service command..." -ForegroundColor Yellow
+    $svcResult2 = wsl -d Ubuntu-24.04 -- bash -c 'sudo service docker start 2>&1 && echo SUCCESS || echo FAILED'
+    $svcOk = [bool]($svcResult2 -match "SUCCESS")
+}
+Write-Check "Docker service started" $svcOk | Out-Null
 
-Write-Host "  Starting Docker service..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo service docker start' 2>&1 | Out-Null
-Write-Check "Docker service started" ($LASTEXITCODE -eq 0) | Out-Null
+Write-Host "  Verifying Docker works..." -ForegroundColor Yellow
+Start-Sleep -Seconds 3
+$dockerVerify = wsl -d Ubuntu-24.04 -- bash -c 'sudo docker version --format "{{.Server.Version}}" 2>/dev/null'
+$dockerRunning = [bool]($dockerVerify -match "\d+\.\d+")
+Write-Check "Docker daemon responding" $dockerRunning | Out-Null
+if (-not $dockerRunning) {
+    Write-Host "  WARNING: Docker installed but daemon not responding yet." -ForegroundColor Yellow
+    Write-Host "  It should work after a WSL restart: wsl --shutdown" -ForegroundColor Yellow
+}
 
 # --- Configure .bashrc and Docker login ---
 Write-Host ""
@@ -400,8 +468,14 @@ function reset {
 
     # Docker login using the provided credentials
     Write-Host "  Logging into Ericsson ARM Docker registry..." -ForegroundColor Yellow
-    wsl -d Ubuntu-24.04 -- bash -c "docker login armdocker.rnd.ericsson.se -u $signum -p $seliToken"
-    Write-Check "Docker login to armdocker.rnd.ericsson.se" ($LASTEXITCODE -eq 0) | Out-Null
+    $loginResult = wsl -d Ubuntu-24.04 -- bash -c "echo '$seliToken' | docker login armdocker.rnd.ericsson.se -u $signum --password-stdin 2>&1"
+    $loginOk = [bool]($loginResult -match "Login Succeeded")
+    Write-Check "Docker login to armdocker.rnd.ericsson.se" $loginOk | Out-Null
+    if (-not $loginOk) {
+        Write-Host "  WARNING: Docker login failed. Output:" -ForegroundColor Yellow
+        Write-Host "  $loginResult" -ForegroundColor DarkGray
+        Write-Host "  You can retry later with: docker login armdocker.rnd.ericsson.se" -ForegroundColor Yellow
+    }
 
 } else {
     Write-Host "  Missing values - skipping .bashrc and Docker login." -ForegroundColor Yellow
