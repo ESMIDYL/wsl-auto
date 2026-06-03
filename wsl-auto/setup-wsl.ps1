@@ -289,7 +289,7 @@ wsl -d Ubuntu-24.04 -- bash -c 'sudo usermod -aG docker $USER' 2>&1 | Out-Null
 Write-Check "User added to docker group" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding Docker auto-start to .bashrc..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'grep -q "service docker status" ~/.bashrc || printf "\n# Auto-start Docker service in WSL\nif grep -q microsoft /proc/version > /dev/null 2>&1; then\n    if service docker status 2>&1 | grep -q \"is not running\"; then\n        wsl.exe --distribution Ubuntu-24.04 --user root --exec /usr/sbin/service docker start > /dev/null 2>&1\n    fi\nfi\n" >> ~/.bashrc' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- bash -c 'HOMEDIR=/home/$(ls /home | head -1) && grep -q "service docker status" "$HOMEDIR/.bashrc" || printf "\n# Auto-start Docker\nif grep -q microsoft /proc/version 2>/dev/null; then\n  if ! service docker status > /dev/null 2>&1; then\n    sudo service docker start > /dev/null 2>&1\n  fi\nfi\n" >> "$HOMEDIR/.bashrc"' 2>&1 | Out-Null
 Write-Check "Docker auto-start added to .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Starting Docker service..." -ForegroundColor Yellow
@@ -328,8 +328,9 @@ if ($signum -and $seroToken -and $seliToken) {
         Write-Host "  .bashrc already has Ericsson config - skipping to avoid duplicates." -ForegroundColor Yellow
         Write-Check ".bashrc already configured" $true | Out-Null
     } else {
-        # Write a temp script inside WSL to avoid Windows line-ending issues
-        wsl -d Ubuntu-24.04 -- bash -c "cat > /tmp/setup_bashrc.sh << 'BASHRCEOF'
+        # Write the bashrc config script to a temp file inside WSL
+        # We use multiple wsl calls to avoid heredoc issues with PowerShell -> WSL passthrough
+        $bashrcContent = @"
 #!/bin/bash
 cat >> ~/.bashrc << 'EOF'
 
@@ -344,30 +345,30 @@ alias pushmaster='git push origin HEAD:refs/for/master'
 alias pushdraft='git push origin HEAD:refs/drafts/master'
 
 # Credentials
-export SIGNUM=""PLACEHOLDER_SIGNUM""
-export SERO_TOKEN=""PLACEHOLDER_SERO""
-export SELI_TOKEN=""PLACEHOLDER_SELI""
+export SIGNUM="PLACEHOLDER_SIGNUM"
+export SERO_TOKEN="PLACEHOLDER_SERO"
+export SELI_TOKEN="PLACEHOLDER_SELI"
 
-export PATH=/home/\$SIGNUM/bob:\$PATH
-export HELM_USER=\$SIGNUM
-export KUBECONFIG=/home/\$SIGNUM/.kube/config
+export PATH=/home/`$SIGNUM/bob:`$PATH
+export HELM_USER=`$SIGNUM
+export KUBECONFIG=/home/`$SIGNUM/.kube/config
 
 export IMAGE_SECRET=armdocker
 
-export K8_NAMESPACE=\$SIGNUM
-export K8S_NAMESPACE=\$SIGNUM
+export K8_NAMESPACE=`$SIGNUM
+export K8S_NAMESPACE=`$SIGNUM
 
-export HELM_REPO_API_TOKEN=\$SELI_TOKEN
+export HELM_REPO_API_TOKEN=`$SELI_TOKEN
 export HELM_INSTALL_TIMEOUT=5m0s
 
-export ARM_USER=\$SIGNUM
-export ARM_TOKEN=\$SELI_TOKEN
+export ARM_USER=`$SIGNUM
+export ARM_TOKEN=`$SELI_TOKEN
 
-export SELI_ARTIFACTORY_REPO_USER=\$SIGNUM
-export SELI_ARTIFACTORY_REPO_PASS=\$SELI_TOKEN
+export SELI_ARTIFACTORY_REPO_USER=`$SIGNUM
+export SELI_ARTIFACTORY_REPO_PASS=`$SELI_TOKEN
 
-export SERO_ARTIFACTORY_REPO_USER=\$SIGNUM
-export SERO_ARTIFACTORY_REPO_PASS=\$SERO_TOKEN
+export SERO_ARTIFACTORY_REPO_USER=`$SIGNUM
+export SERO_ARTIFACTORY_REPO_PASS=`$SERO_TOKEN
 
 # run bob commands to build your project and package a helm chart
 bob-pack() {
@@ -376,27 +377,36 @@ bob-pack() {
 
 # command to remove docker image by passing the image name
 rmi () {
-  docker rmi \$(docker images | grep \"\$1\")
+  docker rmi `$(docker images | grep "`$1")
 }
 
 # uninstall everything and reset namespace
 function reset {
-  helm delete \$(helm ls --short --namespace \$K8_NAMESPACE) --namespace \$K8_NAMESPACE
-  kubectl delete namespace \$K8_NAMESPACE && kubectl create namespace \$K8_NAMESPACE || kubectl create namespace \$K8_NAMESPACE
-  kubectl create secret generic \$IMAGE_SECRET --from-file=.dockerconfigjson=\$HOME/.docker/config.json --type=kubernetes.io/dockerconfigjson --namespace \$K8_NAMESPACE || true
+  helm delete `$(helm ls --short --namespace `$K8_NAMESPACE) --namespace `$K8_NAMESPACE
+  kubectl delete namespace `$K8_NAMESPACE && kubectl create namespace `$K8_NAMESPACE || kubectl create namespace `$K8_NAMESPACE
+  kubectl create secret generic `$IMAGE_SECRET --from-file=.dockerconfigjson=`$HOME/.docker/config.json --type=kubernetes.io/dockerconfigjson --namespace `$K8_NAMESPACE || true
 }
 EOF
-BASHRCEOF
-chmod +x /tmp/setup_bashrc.sh"
+"@
+
+        # Write the script content to a temp file on Windows, then copy into WSL
+        $tempFile = "$env:TEMP\wsl_bashrc_setup.sh"
+        $bashrcContent | Set-Content -Path $tempFile -Encoding UTF8 -NoNewline
+        # Convert to Unix line endings and copy into WSL
+        $wslTempPath = wsl -d Ubuntu-24.04 -- wslpath -u ($tempFile -replace '\\','/')
+        wsl -d Ubuntu-24.04 -- bash -c "cp '$wslTempPath' /tmp/setup_bashrc.sh && sed -i 's/\r//' /tmp/setup_bashrc.sh && chmod +x /tmp/setup_bashrc.sh" 2>&1 | Out-Null
 
         # Replace placeholders with actual values
-        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's/PLACEHOLDER_SIGNUM/$signum/g' /tmp/setup_bashrc.sh"
-        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's|PLACEHOLDER_SERO|$seroToken|g' /tmp/setup_bashrc.sh"
-        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's|PLACEHOLDER_SELI|$seliToken|g' /tmp/setup_bashrc.sh"
+        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's/PLACEHOLDER_SIGNUM/$signum/g' /tmp/setup_bashrc.sh" 2>&1 | Out-Null
+        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's|PLACEHOLDER_SERO|$seroToken|g' /tmp/setup_bashrc.sh" 2>&1 | Out-Null
+        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's|PLACEHOLDER_SELI|$seliToken|g' /tmp/setup_bashrc.sh" 2>&1 | Out-Null
 
         # Run it
-        wsl -d Ubuntu-24.04 -- bash -c 'bash /tmp/setup_bashrc.sh && rm /tmp/setup_bashrc.sh'
+        wsl -d Ubuntu-24.04 -- bash -c 'bash /tmp/setup_bashrc.sh && rm /tmp/setup_bashrc.sh' 2>&1 | Out-Null
         Write-Check ".bashrc environment configured" ($LASTEXITCODE -eq 0) | Out-Null
+
+        # Clean up Windows temp file
+        Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
     }
 
     # Docker login using the provided credentials
