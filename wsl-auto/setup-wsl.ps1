@@ -232,16 +232,16 @@ wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/wsl.conf && printf "[network]\n
 Write-Check "wsl.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Disabling systemd-resolved (prevents DNS override)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo systemctl disable --now systemd-resolved 2>/dev/null; sudo rm -f /etc/resolv.conf' 2>&1 | Out-Null
-Write-Check "systemd-resolved disabled" ($LASTEXITCODE -eq 0) | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'sudo systemctl disable --now systemd-resolved 2>/dev/null; sudo systemctl mask systemd-resolved 2>/dev/null; sudo rm -f /etc/resolv.conf' 2>&1 | Out-Null
+Write-Check "systemd-resolved disabled and masked" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Restarting WSL to apply changes..." -ForegroundColor Yellow
 wsl --terminate Ubuntu-24.04 2>&1 | Out-Null
 Start-Sleep -Seconds 3
 
 Write-Host "  Re-applying /etc/resolv.conf after restart..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null && sudo chattr +i /etc/resolv.conf' 2>&1 | Out-Null
-Write-Check "resolv.conf re-applied and locked" ($LASTEXITCODE -eq 0) | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' 2>&1 | Out-Null
+Write-Check "resolv.conf re-applied" ($LASTEXITCODE -eq 0) | Out-Null
 
 # ============================================================
 # PHASE 4: Install Docker Engine (optional)
@@ -425,7 +425,7 @@ Write-Host "  Verifying DNS before Kiro install..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 cli.kiro.dev > /dev/null 2>&1' 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  DNS not resolving - re-applying resolv.conf..." -ForegroundColor Yellow
-    wsl -d Ubuntu-24.04 -- bash -c 'sudo chattr -i /etc/resolv.conf 2>/dev/null; sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null && sudo chattr +i /etc/resolv.conf' 2>&1 | Out-Null
+    wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' 2>&1 | Out-Null
     Start-Sleep -Seconds 2
     wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 cli.kiro.dev > /dev/null 2>&1' 2>$null
 }
@@ -451,7 +451,18 @@ Write-Host "  then type 'exit' when done to return here." -ForegroundColor Yello
 Write-Host ""
 Read-Host "  Press Enter to start Kiro CLI installation"
 
-wsl -d Ubuntu-24.04 -- bash -ic 'export PATH="$HOME/.local/bin:$PATH" && curl -fsSL https://cli.kiro.dev/install | bash && echo "" && echo "Kiro installed! Type exit to continue." && exec bash'
+# Install Kiro CLI non-interactively first (download + extract)
+Write-Host "  Downloading Kiro CLI..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'export PATH="$HOME/.local/bin:$PATH" && curl -fsSL https://cli.kiro.dev/install | bash' 2>&1 | Out-Null
+Write-Check "Kiro CLI downloaded and installed" ($LASTEXITCODE -eq 0) | Out-Null
+
+# Now launch an interactive session for the user to configure Kiro
+Write-Host ""
+Write-Host "  Launching Ubuntu for Kiro configuration..." -ForegroundColor Yellow
+Write-Host "  Run 'kiro' inside Ubuntu to configure it." -ForegroundColor Yellow
+Write-Host "  When done, type 'exit' to return here." -ForegroundColor Yellow
+Write-Host ""
+wsl -d Ubuntu-24.04
 Write-Check "Kiro CLI installer completed" ($LASTEXITCODE -eq 0) | Out-Null
 
 } else {
@@ -473,6 +484,12 @@ Write-Step "Final Verification"
 
 $dnsCheck = (wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf') 2>$null | Out-String
 $dnsOk = [bool]($dnsCheck -match "193.181.14.10")
+if (-not $dnsOk) {
+    Write-Host "  DNS missing - re-applying resolv.conf..." -ForegroundColor Yellow
+    wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' 2>&1 | Out-Null
+    $dnsCheck = (wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf') 2>$null | Out-String
+    $dnsOk = [bool]($dnsCheck -match "193.181.14.10")
+}
 Write-Check "DNS: 193.181.14.10 present in resolv.conf" $dnsOk | Out-Null
 
 $confCheck = (wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/wsl.conf') 2>$null | Out-String
