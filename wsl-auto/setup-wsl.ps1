@@ -231,13 +231,17 @@ Write-Host "  Setting /etc/wsl.conf..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/wsl.conf && printf "[network]\ngenerateResolvConf=false\n[boot]\nsystemd=true\n" | sudo tee /etc/wsl.conf > /dev/null' 2>&1 | Out-Null
 Write-Check "wsl.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
+Write-Host "  Disabling systemd-resolved (prevents DNS override)..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'sudo systemctl disable --now systemd-resolved 2>/dev/null; sudo rm -f /etc/resolv.conf' 2>&1 | Out-Null
+Write-Check "systemd-resolved disabled" ($LASTEXITCODE -eq 0) | Out-Null
+
 Write-Host "  Restarting WSL to apply changes..." -ForegroundColor Yellow
 wsl --terminate Ubuntu-24.04 2>&1 | Out-Null
-Start-Sleep -Seconds 2
+Start-Sleep -Seconds 3
 
 Write-Host "  Re-applying /etc/resolv.conf after restart..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' 2>&1 | Out-Null
-Write-Check "resolv.conf re-applied" ($LASTEXITCODE -eq 0) | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null && sudo chattr +i /etc/resolv.conf' 2>&1 | Out-Null
+Write-Check "resolv.conf re-applied and locked" ($LASTEXITCODE -eq 0) | Out-Null
 
 # ============================================================
 # PHASE 4: Install Docker Engine (optional)
@@ -431,6 +435,16 @@ $installKiro = Read-Host "  Would you like to install Kiro CLI? (Y/N)"
 if ($installKiro -eq 'Y' -or $installKiro -eq 'y') {
 
 Write-Step "Phase 5: Installing Kiro CLI"
+
+Write-Host "  Verifying DNS before Kiro install..." -ForegroundColor Yellow
+wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 cli.kiro.dev > /dev/null 2>&1' 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  DNS not resolving - re-applying resolv.conf..." -ForegroundColor Yellow
+    wsl -d Ubuntu-24.04 -- bash -c 'sudo chattr -i /etc/resolv.conf 2>/dev/null; sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null && sudo chattr +i /etc/resolv.conf' 2>&1 | Out-Null
+    Start-Sleep -Seconds 2
+    wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 cli.kiro.dev > /dev/null 2>&1' 2>$null
+}
+Write-Check "DNS resolving for cli.kiro.dev" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Installing unzip..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y unzip' 2>&1 | Out-Null
