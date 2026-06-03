@@ -224,43 +224,52 @@ wsl -d Ubuntu-24.04 --user root -- bash -c "echo '$wslUser ALL=(ALL) NOPASSWD:AL
 Write-Check "Passwordless sudo enabled for $wslUser" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Setting /etc/resolv.conf (Ericsson DNS)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -rf /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
 Write-Check "resolv.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
 
-Write-Host "  Setting /etc/wsl.conf..." -ForegroundColor Yellow
-$wslConfContent = "[network]`ngenerateResolvConf=false`n[boot]`nsystemd=true`n"
+Write-Host "  Setting /etc/wsl.conf (with boot command for DNS)..." -ForegroundColor Yellow
+# Use a boot command to force resolv.conf on every WSL start - this is the most reliable approach
+# because systemd-resolved recreates the symlink on boot even when masked
+$wslConfContent = "[network]`ngenerateResolvConf=false`n[boot]`nsystemd=true`ncommand=/bin/bash -c 'rm -f /etc/resolv.conf && echo nameserver 193.181.14.10 > /etc/resolv.conf && echo nameserver 193.181.14.11 >> /etc/resolv.conf && echo nameserver 8.8.8.8 >> /etc/resolv.conf'`n"
 $wslConfBytes = [System.Text.Encoding]::UTF8.GetBytes($wslConfContent.Replace("`r`n", "`n"))
 $wslConfB64 = [Convert]::ToBase64String($wslConfBytes)
-wsl -d Ubuntu-24.04 -- bash -c "sudo rm -f /etc/wsl.conf && echo $wslConfB64 | base64 -d | sudo tee /etc/wsl.conf > /dev/null" 2>&1 | Out-Null
-Write-Check "wsl.conf configured" ($LASTEXITCODE -eq 0) | Out-Null
+wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/wsl.conf && echo $wslConfB64 | base64 -d > /etc/wsl.conf" 2>&1 | Out-Null
+Write-Check "wsl.conf configured (with boot DNS command)" ($LASTEXITCODE -eq 0) | Out-Null
+
+# Verify wsl.conf was written correctly
+$wslConfCheck = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/wsl.conf 2>/dev/null'
+Write-Host "  wsl.conf content:" -ForegroundColor DarkGray
+Write-Host "  $wslConfCheck" -ForegroundColor DarkGray
 
 Write-Host "  Disabling systemd-resolved (prevents DNS override)..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo systemctl stop systemd-resolved 2>/dev/null; sudo systemctl disable systemd-resolved 2>/dev/null; sudo systemctl mask systemd-resolved 2>/dev/null; sudo rm -f /run/systemd/resolve/stub-resolv.conf 2>/dev/null' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- bash -c "systemctl stop systemd-resolved 2>/dev/null; systemctl disable systemd-resolved 2>/dev/null; systemctl mask systemd-resolved 2>/dev/null; rm -f /run/systemd/resolve/stub-resolv.conf 2>/dev/null; rm -f /etc/resolv.conf" 2>&1 | Out-Null
 Write-Check "systemd-resolved disabled and masked" ($LASTEXITCODE -eq 0) | Out-Null
 
-# Remove resolv.conf (may be a symlink to systemd-resolved stub) and write correct one BEFORE restart
+# Write resolv.conf now (before restart) using the proven method
 Write-Host "  Writing resolv.conf before restart..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 --user root -- bash -c 'rm -f /etc/resolv.conf; printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" > /etc/resolv.conf; chattr +i /etc/resolv.conf 2>/dev/null; true' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
 
 Write-Host "  Restarting WSL to apply wsl.conf changes..." -ForegroundColor Yellow
 wsl --terminate Ubuntu-24.04 2>&1 | Out-Null
-Start-Sleep -Seconds 5
+Start-Sleep -Seconds 6
 
-Write-Host "  Re-applying /etc/resolv.conf after restart..." -ForegroundColor Yellow
-# After restart, check if the file survived. If not (immutable flag lost on restart), rewrite it.
+# The boot command in wsl.conf should have created resolv.conf on startup
+Write-Host "  Verifying resolv.conf after restart..." -ForegroundColor Yellow
 $postRestartResolv = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
 if ($postRestartResolv -notmatch "193.181.14.10") {
-    Write-Host "  resolv.conf was lost after restart - rewriting..." -ForegroundColor Yellow
-    wsl -d Ubuntu-24.04 --user root -- bash -c 'rm -f /etc/resolv.conf; printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" > /etc/resolv.conf; chattr +i /etc/resolv.conf 2>/dev/null; true' 2>&1 | Out-Null
+    Write-Host "  Boot command didn't write resolv.conf - writing manually..." -ForegroundColor Yellow
+    wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
+    Start-Sleep -Seconds 1
+    $postRestartResolv = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
 }
 
-# Verify resolv.conf is correct
-$verifyResolv = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
-$resolvOk = [bool]($verifyResolv -match "193.181.14.10")
+$resolvOk = [bool]($postRestartResolv -match "193.181.14.10")
 Write-Check "resolv.conf verified after restart" $resolvOk | Out-Null
 if (-not $resolvOk) {
-    Write-Host "  WARNING: resolv.conf may not be correct. Content:" -ForegroundColor Yellow
-    Write-Host "  $verifyResolv" -ForegroundColor DarkGray
+    Write-Host "  WARNING: resolv.conf still not correct after restart." -ForegroundColor Yellow
+    Write-Host "  Content: '$postRestartResolv'" -ForegroundColor DarkGray
+    $linkCheck = wsl -d Ubuntu-24.04 -- bash -c 'ls -la /etc/resolv.conf 2>&1'
+    Write-Host "  File info: $linkCheck" -ForegroundColor DarkGray
 }
 
 # ============================================================
@@ -275,10 +284,10 @@ Write-Step "Phase 4: Installing Docker Engine"
 Write-Host "  Ensuring resolv.conf exists and is correct..." -ForegroundColor Yellow
 
 # First, make sure systemd-resolved isn't running and fighting us
-wsl -d Ubuntu-24.04 --user root -- bash -c 'systemctl stop systemd-resolved 2>/dev/null; systemctl mask systemd-resolved 2>/dev/null; true' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- bash -c "systemctl stop systemd-resolved 2>/dev/null; systemctl mask systemd-resolved 2>/dev/null; true" 2>&1 | Out-Null
 
-# Force-remove any symlink or stale file and recreate
-wsl -d Ubuntu-24.04 --user root -- bash -c 'chattr -i /etc/resolv.conf 2>/dev/null; rm -f /etc/resolv.conf; printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" > /etc/resolv.conf; chattr +i /etc/resolv.conf 2>/dev/null; true'
+# Force-remove any symlink or stale file and recreate using simple echo (proven to work)
+wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf"
 
 # Verify it was written
 $resolveCheck = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
@@ -286,10 +295,7 @@ if ($resolveCheck -match "193.181.14.10") {
     Write-Check "resolv.conf written correctly" $true | Out-Null
 } else {
     Write-Host "  WARNING: resolv.conf may not have been written. Content: $resolveCheck" -ForegroundColor Yellow
-    # Try a different approach - pipe through tee
-    wsl -d Ubuntu-24.04 --user root -- bash -c 'chattr -i /etc/resolv.conf 2>/dev/null; rm -f /etc/resolv.conf; echo -e "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8" | tee /etc/resolv.conf > /dev/null; chattr +i /etc/resolv.conf 2>/dev/null; true'
-    $resolveCheck2 = wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf 2>/dev/null'
-    Write-Check "resolv.conf retry" ([bool]($resolveCheck2 -match "193.181.14.10")) | Out-Null
+    Write-Check "resolv.conf write" $false | Out-Null
 }
 
 Start-Sleep -Seconds 2
@@ -313,7 +319,7 @@ while ($dnsRetries -lt 5 -and -not $dnsOk) {
             if ($directDns -match "OK") {
                 Write-Host "  Google DNS (8.8.8.8) works! The Ericsson DNS may be unreachable." -ForegroundColor Yellow
                 Write-Host "  Updating resolv.conf to prioritize 8.8.8.8..." -ForegroundColor Yellow
-                wsl -d Ubuntu-24.04 --user root -- bash -c 'chattr -i /etc/resolv.conf 2>/dev/null; rm -f /etc/resolv.conf; printf "nameserver 8.8.8.8\nnameserver 193.181.14.10\nnameserver 193.181.14.11\n" > /etc/resolv.conf; chattr +i /etc/resolv.conf 2>/dev/null; true'
+                wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 8.8.8.8 > /etc/resolv.conf; echo nameserver 193.181.14.10 >> /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf"
                 $dnsOk = $true
             }
         }
@@ -584,7 +590,7 @@ Write-Host "  Verifying DNS before Kiro install..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 cli.kiro.dev > /dev/null 2>&1' 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  DNS not resolving - re-applying resolv.conf..." -ForegroundColor Yellow
-    wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' 2>&1 | Out-Null
+    wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
     Start-Sleep -Seconds 2
     wsl -d Ubuntu-24.04 -- bash -c 'ping -c 1 cli.kiro.dev > /dev/null 2>&1' 2>$null
 }
@@ -652,7 +658,7 @@ $dnsCheck = (wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf') 2>$null | Ou
 $dnsOk = [bool]($dnsCheck -match "193.181.14.10")
 if (-not $dnsOk) {
     Write-Host "  DNS missing - re-applying resolv.conf..." -ForegroundColor Yellow
-    wsl -d Ubuntu-24.04 -- bash -c 'sudo rm -f /etc/resolv.conf && printf "nameserver 193.181.14.10\nnameserver 193.181.14.11\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf > /dev/null' 2>&1 | Out-Null
+    wsl -d Ubuntu-24.04 --user root -- bash -c "rm -f /etc/resolv.conf; echo nameserver 193.181.14.10 > /etc/resolv.conf; echo nameserver 193.181.14.11 >> /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf" 2>&1 | Out-Null
     $dnsCheck = (wsl -d Ubuntu-24.04 -- bash -c 'cat /etc/resolv.conf') 2>$null | Out-String
     $dnsOk = [bool]($dnsCheck -match "193.181.14.10")
 }
