@@ -432,38 +432,34 @@ if ($LASTEXITCODE -ne 0) {
 Write-Check "DNS resolving for cli.kiro.dev" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Installing unzip..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y unzip' 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'sudo apt-get install -y -qq unzip' 2>&1 | Out-Null
 Write-Check "unzip installed" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Adding ~/.local/bin to PATH..." -ForegroundColor Yellow
 wsl -d Ubuntu-24.04 -- bash -c 'grep -q "HOME/.local/bin" ~/.bashrc || echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> ~/.bashrc' 2>&1 | Out-Null
 Write-Check "PATH updated in .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
 
-Write-Host "  Downloading and installing Kiro CLI..." -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  >>> WHEN PROMPTED: <<<" -ForegroundColor Magenta
-Write-Host "    - License: Select 'Pro license'" -ForegroundColor White
-Write-Host "    - Start URL: https://d-9367077c28.awsapps.com/start" -ForegroundColor White
-Write-Host "    - Region: eu-west-1" -ForegroundColor White
+Write-Host "  ============================================" -ForegroundColor Cyan
+Write-Host "    Kiro CLI Installation & Setup" -ForegroundColor Cyan
+Write-Host "  ============================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Kiro will open in Ubuntu. Follow the prompts," -ForegroundColor Yellow
-Write-Host "  then type 'exit' when done to return here." -ForegroundColor Yellow
+Write-Host "  You'll be dropped into Ubuntu to install and configure Kiro." -ForegroundColor Yellow
 Write-Host ""
-Read-Host "  Press Enter to start Kiro CLI installation"
+Write-Host "  The install command will run automatically." -ForegroundColor Yellow
+Write-Host "  When prompted:" -ForegroundColor Cyan
+Write-Host "    1. Select: 'Use with Pro license'" -ForegroundColor White
+Write-Host "    2. Start URL: https://d-9367077c28.awsapps.com/start" -ForegroundColor White
+Write-Host "    3. Region: eu-west-1" -ForegroundColor White
+Write-Host "    4. Click the browser link to authenticate" -ForegroundColor White
+Write-Host "    5. Select the 'SelectMe' or 'KiroProfile' profile" -ForegroundColor White
+Write-Host ""
+Write-Host "  When finished, type 'exit' to return here." -ForegroundColor Magenta
+Write-Host ""
+Read-Host "  Press Enter to begin Kiro setup"
 
-# Install Kiro CLI non-interactively first (download + extract)
-Write-Host "  Downloading Kiro CLI..." -ForegroundColor Yellow
-wsl -d Ubuntu-24.04 -- bash -c 'export PATH="$HOME/.local/bin:$PATH" && curl -fsSL https://cli.kiro.dev/install | bash' 2>&1 | Out-Null
-Write-Check "Kiro CLI downloaded and installed" ($LASTEXITCODE -eq 0) | Out-Null
-
-# Now launch an interactive session for the user to configure Kiro
-Write-Host ""
-Write-Host "  Launching Ubuntu for Kiro configuration..." -ForegroundColor Yellow
-Write-Host "  Run 'kiro' inside Ubuntu to configure it." -ForegroundColor Yellow
-Write-Host "  When done, type 'exit' to return here." -ForegroundColor Yellow
-Write-Host ""
-wsl -d Ubuntu-24.04
-Write-Check "Kiro CLI installer completed" ($LASTEXITCODE -eq 0) | Out-Null
+wsl -d Ubuntu-24.04 -- bash -c 'export PATH="$HOME/.local/bin:$PATH" && curl -fsSL https://cli.kiro.dev/install | bash && exec bash -l'
+Write-Check "Kiro CLI setup completed" ($LASTEXITCODE -eq 0) | Out-Null
 
 } else {
     Write-Host ""
