@@ -486,139 +486,41 @@ if (-not $dockerRunning) {
 
 # --- Configure .bashrc and Docker login ---
 Write-Host ""
-Write-Host "  Now let's set up your .bashrc environment and Docker login." -ForegroundColor Cyan
+Write-Host "  ============================================" -ForegroundColor Cyan
+Write-Host "    .bashrc + Docker Login Setup" -ForegroundColor Cyan
+Write-Host "  ============================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  You'll need your Identity Tokens from:" -ForegroundColor Yellow
+Write-Host "  You now need to configure your .bashrc and Docker login." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  You'll be dropped into Ubuntu. Run these steps:" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  1. Open .bashrc in nano:" -ForegroundColor Cyan
+Write-Host "       nano ~/.bashrc" -ForegroundColor White
+Write-Host ""
+Write-Host "  2. Scroll to the bottom (Ctrl+End) and paste the config block." -ForegroundColor Cyan
+Write-Host "     (The block is shown in the USER_GUIDE.md or WSL_guide.pdf)" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  3. Replace the placeholder values:" -ForegroundColor Cyan
+Write-Host "       SIGNUM   = your Ericsson signum (e.g. esmidyl)" -ForegroundColor White
+Write-Host "       SERO_TOKEN = your SERO Identity Token" -ForegroundColor White
+Write-Host "       SELI_TOKEN = your SELI Identity Token" -ForegroundColor White
+Write-Host ""
+Write-Host "  4. Save: Ctrl+O, Enter, Ctrl+X" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  5. Reload: source ~/.bashrc" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  6. Docker login:" -ForegroundColor Cyan
+Write-Host "       docker login armdocker.rnd.ericsson.se" -ForegroundColor White
+Write-Host "     Username = your signum, Password = your SELI token" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  7. Type 'exit' to return here when done." -ForegroundColor Magenta
+Write-Host ""
+Write-Host "  Token URLs:" -ForegroundColor Yellow
 Write-Host "    SELI: https://arm.seli.gic.ericsson.se/ui/packages" -ForegroundColor White
 Write-Host "    SERO: https://arm.sero.gic.ericsson.se/ui/packages" -ForegroundColor White
 Write-Host ""
-Write-Host "  How to get your token:" -ForegroundColor Cyan
-Write-Host "    1. Go to the URL above and click Login (top right)" -ForegroundColor White
-Write-Host "    2. Login with your Ericsson credentials" -ForegroundColor White
-Write-Host "    3. Click the dropdown arrow (top right) -> Edit Profile" -ForegroundColor White
-Write-Host "    4. Enter your password to unlock your profile" -ForegroundColor White
-Write-Host "    5. Click 'Generate An Identity Token'" -ForegroundColor White
-Write-Host "    6. Give it a description -> Click Next" -ForegroundColor White
-Write-Host "    7. Copy the Reference Token (save it - you can't see it again!)" -ForegroundColor White
-Write-Host ""
-
-$signum = Read-Host "  Enter your Ericsson signum (e.g. esmidyl)"
-$seroToken = Read-Host "  Enter your SERO Identity Token"
-$seliToken = Read-Host "  Enter your SELI Identity Token"
-
-if ($signum -and $seroToken -and $seliToken) {
-    Write-Host ""
-    Write-Host "  Writing environment config to .bashrc..." -ForegroundColor Yellow
-
-    # Check if already configured (use sh to avoid sourcing .bashrc which may be broken)
-    $alreadyDone = wsl -d Ubuntu-24.04 --user root -- sh -c 'grep -q "Ericsson Environment Configuration" /home/*/.[b]ashrc 2>/dev/null && echo YES || echo NO'
-    if ($alreadyDone -match "YES") {
-        Write-Host "  .bashrc already has Ericsson config - skipping to avoid duplicates." -ForegroundColor Yellow
-        Write-Check ".bashrc already configured" $true | Out-Null
-    } else {
-        # Escape single quotes in token values for safe embedding in bash single-quoted strings
-        # Replace ' with '\'' (end quote, escaped quote, start quote)
-        $escapedSeroToken = $seroToken -replace "'", "'\\''"
-        $escapedSeliToken = $seliToken -replace "'", "'\\''"
-        $escapedSignum = $signum -replace "'", "'\\''"
-
-        # Build the bashrc block using a non-interpolating here-string first,
-        # then substitute the credential placeholders manually.
-        # This prevents PowerShell from misinterpreting $ in token values.
-        $bashrcTemplate = @'
-
-# ============================================================
-# Ericsson Environment Configuration
-# ============================================================
-
-# Aliases
-alias mvnst='mvn clean install -DskipTests'
-alias rebase='git pull --rebase origin master'
-alias pushmaster='git push origin HEAD:refs/for/master'
-alias pushdraft='git push origin HEAD:refs/drafts/master'
-
-# Credentials (single-quoted to prevent interpretation of special chars)
-export SIGNUM='__SIGNUM__'
-export SERO_TOKEN='__SERO_TOKEN__'
-export SELI_TOKEN='__SELI_TOKEN__'
-
-export PATH="/home/$SIGNUM/bob:$PATH"
-export HELM_USER="$SIGNUM"
-export KUBECONFIG="/home/$SIGNUM/.kube/config"
-
-export IMAGE_SECRET=armdocker
-
-export K8_NAMESPACE="$SIGNUM"
-export K8S_NAMESPACE="$SIGNUM"
-
-export HELM_REPO_API_TOKEN="$SELI_TOKEN"
-export HELM_INSTALL_TIMEOUT=5m0s
-
-export ARM_USER="$SIGNUM"
-export ARM_TOKEN="$SELI_TOKEN"
-
-export SELI_ARTIFACTORY_REPO_USER="$SIGNUM"
-export SELI_ARTIFACTORY_REPO_PASS="$SELI_TOKEN"
-
-export SERO_ARTIFACTORY_REPO_USER="$SIGNUM"
-export SERO_ARTIFACTORY_REPO_PASS="$SERO_TOKEN"
-
-# run bob commands to build your project and package a helm chart
-bob-pack() {
-  bob clean init-dev build image package-local
-}
-
-# command to remove docker image by passing the image name
-rmi () {
-  docker rmi $(docker images | grep "$1")
-}
-
-# uninstall everything and reset namespace
-reset() {
-  helm delete $(helm ls --short --namespace $K8_NAMESPACE) --namespace $K8_NAMESPACE
-  kubectl delete namespace $K8_NAMESPACE && kubectl create namespace $K8_NAMESPACE || kubectl create namespace $K8_NAMESPACE
-  kubectl create secret generic $IMAGE_SECRET --from-file=.dockerconfigjson="$HOME/.docker/config.json" --type=kubernetes.io/dockerconfigjson --namespace $K8_NAMESPACE || true
-}
-'@
-
-        # Substitute placeholders with actual (escaped) values
-        $bashrcBlock = $bashrcTemplate -replace '__SIGNUM__', $escapedSignum
-        $bashrcBlock = $bashrcBlock -replace '__SERO_TOKEN__', $escapedSeroToken
-        $bashrcBlock = $bashrcBlock -replace '__SELI_TOKEN__', $escapedSeliToken
-
-        # Write to .bashrc using base64 encoding via sh (not bash) to avoid sourcing .bashrc
-        $bashrcContent = $bashrcBlock.Replace("`r`n", "`n")
-        $bashrcBytes = [System.Text.Encoding]::UTF8.GetBytes($bashrcContent)
-        $bashrcB64 = [Convert]::ToBase64String($bashrcBytes)
-        
-        # Get the target user's home directory using root + sh (no .bashrc sourced)
-        $targetHome = (wsl -d Ubuntu-24.04 --user root -- sh -c "getent passwd $wslUser | cut -d: -f6") | Out-String
-        $targetHome = $targetHome.Trim()
-        if (-not $targetHome) { $targetHome = "/home/$wslUser" }
-        
-        wsl -d Ubuntu-24.04 --user root -- sh -c "echo $bashrcB64 | base64 -d >> $targetHome/.bashrc"
-        $bashrcWriteOk = ($LASTEXITCODE -eq 0)
-        Write-Check ".bashrc environment configured" $bashrcWriteOk | Out-Null
-    }
-
-    # Docker login using the provided credentials
-    Write-Host "  Logging into Ericsson ARM Docker registry..." -ForegroundColor Yellow
-    # Use base64 encoding to safely pass the token via sh (not bash) to avoid .bashrc hang
-    $tokenBytes = [System.Text.Encoding]::UTF8.GetBytes($seliToken)
-    $tokenB64 = [Convert]::ToBase64String($tokenBytes)
-    $loginResult = wsl -d Ubuntu-24.04 --user root -- sh -c "echo $tokenB64 | base64 -d | docker login armdocker.rnd.ericsson.se -u $signum --password-stdin 2>&1"
-    $loginOk = [bool]($loginResult -match "Login Succeeded")
-    Write-Check "Docker login to armdocker.rnd.ericsson.se" $loginOk | Out-Null
-    if (-not $loginOk) {
-        Write-Host "  WARNING: Docker login failed. Output:" -ForegroundColor Yellow
-        Write-Host "  $loginResult" -ForegroundColor DarkGray
-        Write-Host "  You can retry later with: docker login armdocker.rnd.ericsson.se" -ForegroundColor Yellow
-    }
-
-} else {
-    Write-Host "  Missing values - skipping .bashrc and Docker login." -ForegroundColor Yellow
-    Write-Host "  You can set them up manually later." -ForegroundColor Yellow
-}
+Read-Host "  Press Enter to open Ubuntu"
+wsl -d Ubuntu-24.04
 
 } else {
     Write-Host ""
