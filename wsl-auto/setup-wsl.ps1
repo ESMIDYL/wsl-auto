@@ -219,14 +219,14 @@ Write-Step "Phase 3: Configuring DNS and wsl.conf"
 # Enable passwordless sudo for this setup session (avoids repeated password prompts)
 Write-Host "  Enabling passwordless sudo for setup..." -ForegroundColor Yellow
 # Get the default user safely without sourcing .bashrc (use root + getent)
-$wslUser = (wsl -d Ubuntu-24.04 --user root -- sh -c "getent passwd | awk -F: '\$3 >= 1000 && \$3 < 65534 {print \$1; exit}'") | Out-String
+$wslUser = (wsl -d Ubuntu-24.04 --user root -- sh -c 'getent passwd | awk -F: "$3 >= 1000 && $3 < 65534 {print $1; exit}"') | Out-String
 $wslUser = $wslUser.Trim()
 if (-not $wslUser) {
     # Second fallback: check /etc/passwd directly
-    $wslUser = (wsl -d Ubuntu-24.04 --user root -- sh -c "awk -F: '\$3 >= 1000 && \$3 < 65534 {print \$1; exit}' /etc/passwd") | Out-String
+    $wslUser = (wsl -d Ubuntu-24.04 --user root -- sh -c 'awk -F: "$3 >= 1000 && $3 < 65534 {print $1; exit}" /etc/passwd') | Out-String
     $wslUser = $wslUser.Trim()
 }
-wsl -d Ubuntu-24.04 --user root -- sh -c "echo '$wslUser ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/temp-setup && chmod 440 /etc/sudoers.d/temp-setup" 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- sh -c "echo '$wslUser ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/temp-setup; chmod 440 /etc/sudoers.d/temp-setup" 2>&1 | Out-Null
 Write-Check "Passwordless sudo enabled for $wslUser" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host "  Setting /etc/resolv.conf (Ericsson DNS)..." -ForegroundColor Yellow
@@ -239,7 +239,7 @@ Write-Host "  Setting /etc/wsl.conf (with boot command for DNS)..." -ForegroundC
 $wslConfContent = "[network]`ngenerateResolvConf=false`n[boot]`nsystemd=true`ncommand=/bin/bash -c 'rm -f /etc/resolv.conf && echo nameserver 193.181.14.10 > /etc/resolv.conf && echo nameserver 193.181.14.11 >> /etc/resolv.conf && echo nameserver 8.8.8.8 >> /etc/resolv.conf'`n"
 $wslConfBytes = [System.Text.Encoding]::UTF8.GetBytes($wslConfContent.Replace("`r`n", "`n"))
 $wslConfB64 = [Convert]::ToBase64String($wslConfBytes)
-wsl -d Ubuntu-24.04 --user root -- sh -c "rm -f /etc/wsl.conf && echo $wslConfB64 | base64 -d > /etc/wsl.conf" 2>&1 | Out-Null
+wsl -d Ubuntu-24.04 --user root -- sh -c "rm -f /etc/wsl.conf; echo $wslConfB64 | base64 -d > /etc/wsl.conf" 2>&1 | Out-Null
 Write-Check "wsl.conf configured (with boot DNS command)" ($LASTEXITCODE -eq 0) | Out-Null
 
 # Verify wsl.conf was written correctly
@@ -409,7 +409,7 @@ echo SUCCESS
 '@
 $gpgBytes = [System.Text.Encoding]::UTF8.GetBytes($gpgScript.Replace("`r`n", "`n"))
 $gpgB64 = [Convert]::ToBase64String($gpgBytes)
-$gpgResult = wsl -d Ubuntu-24.04 --user root -- sh -c "echo $gpgB64 | base64 -d > /tmp/docker-gpg.sh && sh /tmp/docker-gpg.sh"
+$gpgResult = wsl -d Ubuntu-24.04 --user root -- sh -c "echo $gpgB64 | base64 -d > /tmp/docker-gpg.sh; sh /tmp/docker-gpg.sh"
 $gpgOk = [bool]($gpgResult -match "SUCCESS")
 Write-Check "Docker GPG key added" $gpgOk | Out-Null
 if (-not $gpgOk) {
@@ -428,7 +428,7 @@ echo SUCCESS
 '@
 $repoBytes = [System.Text.Encoding]::UTF8.GetBytes($repoScript.Replace("`r`n", "`n"))
 $repoB64 = [Convert]::ToBase64String($repoBytes)
-$repoResult = wsl -d Ubuntu-24.04 --user root -- sh -c "echo $repoB64 | base64 -d > /tmp/docker-repo.sh && sh /tmp/docker-repo.sh"
+$repoResult = wsl -d Ubuntu-24.04 --user root -- sh -c "echo $repoB64 | base64 -d > /tmp/docker-repo.sh; sh /tmp/docker-repo.sh"
 $repoOk = [bool]($repoResult -match "SUCCESS")
 Write-Check "Docker repository added" $repoOk | Out-Null
 if (-not $repoOk) {
@@ -651,7 +651,9 @@ Write-Host "  Adding ~/.local/bin to PATH..." -ForegroundColor Yellow
 $targetHome2 = (wsl -d Ubuntu-24.04 --user root -- sh -c "getent passwd $wslUser | cut -d: -f6") | Out-String
 $targetHome2 = $targetHome2.Trim()
 if (-not $targetHome2) { $targetHome2 = "/home/$wslUser" }
-wsl -d Ubuntu-24.04 --user root -- sh -c "grep -q 'HOME/.local/bin' $targetHome2/.bashrc || echo 'export PATH="'$'"HOME/.local/bin:"'$'"PATH"' >> $targetHome2/.bashrc" 2>&1 | Out-Null
+$pathLine = 'export PATH="$HOME/.local/bin:$PATH"'
+$pathB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($pathLine))
+wsl -d Ubuntu-24.04 --user root -- sh -c "grep -q 'HOME/.local/bin' $targetHome2/.bashrc || echo $pathB64 | base64 -d >> $targetHome2/.bashrc" 2>&1 | Out-Null
 Write-Check "PATH updated in .bashrc" ($LASTEXITCODE -eq 0) | Out-Null
 
 Write-Host ""
@@ -721,7 +723,7 @@ Write-Check "wsl.conf: generateResolvConf=false" $confOk | Out-Null
 $systemdOk = [bool]($confCheck -match "systemd=true")
 Write-Check "wsl.conf: systemd=true" $systemdOk | Out-Null
 
-$kiroCheck = (wsl -d Ubuntu-24.04 --user root -- sh -c "test -f $targetHome2/.local/bin/kiro && echo kiro") 2>$null | Out-String
+$kiroCheck = (wsl -d Ubuntu-24.04 --user root -- sh -c "ls $targetHome2/.local/bin/kiro 2>/dev/null") 2>$null | Out-String
 $kiroOk = [bool]($kiroCheck -match "kiro")
 if ($kiroOk) {
     Write-Check "Kiro CLI installed" $true | Out-Null
